@@ -1,23 +1,24 @@
 /**
- * 五子奇境 · 冰川石板与棋子绘制
+ * 五子奇境 · 棋盘石板与棋子绘制
  *
  * 渲染分七层，顺序固定（由 main.js 的 render() 依次调用）：
- *   1. Render.Arena.drawScene       —— 洞穴背景（见 render/arena.js）
- *   2. Render.Board.drawBoard       —— 冰川石板（缓存贴图）、格子线、星位
+ *   1. Render.Scene.drawScene       —— 场景背景（见 render/scene.js，按模式主题）
+ *   2. Render.Board.drawBoard       —— 石板（缓存贴图）、格子线、星位
  *   3. Render.Arena.drawArena       —— 场地覆盖物（棋子之下）
  *   4. Render.Board.drawPieces      —— 棋子
  *   5. Render.Arena.drawMinePreview —— 雷区悬停预览
  *   6. Render.Arena.drawArenaOverlay—— 冰块 / 水波 / 水位条 / 雷区数字（棋子之上）
- *   7. Render.Arena.drawAtmosphere  —— 光线、边缘霜花、前景雪、暗角、胜利聚焦
+ *   7. Render.Scene.drawAtmosphere  —— 光线、边缘霜/尘/雾、前景粒子、暗角、胜利聚焦
  *
  * 坐标系：逻辑坐标以 CSS 像素为单位，原点在画布左上角。
  * 画布已按 devicePixelRatio 缩放，因此绘制时无需再关心物理像素。
  *
  * 美术约定：
- *  - 「石板」= 棋盘可见表面，其矩形由 Art.boardRectOf 统一给出（与 arena 共用一个口径）；
- *    石板本体（渐变 + 冰纹 + 霜花 + 颗粒 + 倒角）只在尺寸变化时生成一次，缓存成离屏贴图；
- *  - 石板的上下两色 boardTop / boardBottom 必须与 arena 河流淡出的两端一致，
- *    因此这里同时导出 RGB 三元组，arena 直接引用，杜绝两处色值写歪。
+ *  - 「石板」= 棋盘可见表面，其矩形由 Art.boardRectOf 统一给出（与场景层共用口径）；
+ *  - 石板的**材质随模式主题变**（见 render/theme.js）：经典是中性冰面、雪山是冰川、
+ *    溪流是湿石、雷区是砂岩。石板本体（渐变 + 冰纹 + 霜花 + 颗粒 + 倒角）只在
+ *    主题/尺寸变化时生成一次，缓存成离屏贴图；
+ *  - 石板上下两色的 RGB 三元组由主题提供，河流淡出直接引用同一份，杜绝两处写歪。
  */
 (function () {
   'use strict';
@@ -26,38 +27,28 @@
   var T = G.Types;
   var B = G.Board;
   var Art = G.Render.Art;
+  var Theme = G.Render.Theme;
 
   // 几何参数由 configure() 写入，绘制函数只读
   var geom = {
     size: 0,        // 棋盘宽高（CSS 像素）
-    margin: 0,      // 石板外留白（= 洞穴岩壁边框宽度）
+    margin: 0,      // 石板外留白（= 场景边框宽度）
     origin: 0,      // 第一条线的坐标
     cell: 0,        // 相邻两条线的间距
     dpr: 1          // 设备像素比，用于生成清晰的缓存贴图
   };
 
-  // 冰川色系
+  /** 当前帧的主题：由 drawBoard / drawPieces 写入，供棋子光照取色。 */
+  var themeNow = Theme.get('classic');
+
+  // 与主题无关的固定色：棋子本体、最后一手标记、五连辉光
   var COLORS = {
-    boardTop: '#f1f9fe',
-    boardTopRgb: [241, 249, 254],
-    boardMid: '#dcebf7',
-    boardBottom: '#b7d6ec',
-    boardBottomRgb: [183, 214, 236],
-
-    gridLine: 'rgba(30, 68, 98, 0.40)',
-    gridHighlight: 'rgba(255, 255, 255, 0.5)',
-    gridEdge: 'rgba(24, 56, 84, 0.55)',
-    starPoint: 'rgba(32, 74, 106, 0.68)',
-    starSpark: 'rgba(255, 255, 255, 0.85)',
-
     blackFill: '#0c141d',
     blackHighlight: '#42586e',
-    blackRim: 'rgba(122, 198, 240, 0.5)',
     blackEdge: 'rgba(3, 8, 14, 0.9)',
 
     whiteFill: '#e9f2f9',
     whiteHighlight: '#ffffff',
-    whiteRim: 'rgba(146, 186, 216, 0.42)',
     whiteEdge: 'rgba(126, 158, 184, 0.78)',
 
     stoneShadow: 'rgba(5, 11, 18, 0.5)',
@@ -160,13 +151,13 @@
   var plate = null;
 
   /**
-   * 取当前尺寸的石板贴图，必要时重建。
+   * 取当前主题与尺寸的石板贴图，必要时重建。
    * 贴图铺满整张画布：石板之外是透明的（含石板的外发光与落影），
-   * 因此它必须画在洞穴背景之上，透明处自然露出岩壁。
+   * 因此它必须画在场景背景之上，透明处自然露出岩壁。
    */
-  function ensurePlate(state) {
+  function ensurePlate(state, theme) {
     var n = gridSizeOf(state);
-    var key = geom.size + '|' + geom.margin + '|' + geom.dpr + '|' + n;
+    var key = theme.id + '|' + geom.size + '|' + geom.margin + '|' + geom.dpr + '|' + n;
 
     if (plate && plate.key === key) return plate;
 
@@ -174,7 +165,7 @@
     var radius = Art.slabRadiusOf(geom);
     var surface = Art.createSurface(geom.size, geom.size, geom.dpr);
 
-    if (surface) paintPlate(surface.ctx, rect, radius);
+    if (surface) paintPlate(surface.ctx, rect, radius, theme);
 
     plate = {
       key: key,
@@ -186,19 +177,23 @@
     return plate;
   }
 
-  /** 冰层纹理：石板里斜向的细长亮纹，像冻结时留下的层理。 */
-  function paintIceStrata(ctx, rect, rng) {
+  /** 层理纹理：石板里斜向的细长亮纹（冰层 / 石纹 / 岩层）。 */
+  function paintIceStrata(ctx, rect, rng, theme) {
+    if (theme.slab.strata <= 0) return;
+
+    var count = Math.round(30 * theme.slab.strata) + 8;
+
     ctx.save();
     ctx.lineCap = 'round';
 
-    for (var i = 0; i < 30; i++) {
+    for (var i = 0; i < count; i++) {
       var x = rect.x + rng() * rect.width;
       var y = rect.y + rng() * rect.height;
       var len = rect.width * (0.10 + rng() * 0.42);
       var ang = (rng() - 0.5) * 0.42;
 
-      ctx.globalAlpha = 0.05 + rng() * 0.11;
-      ctx.strokeStyle = rng() > 0.28 ? '#ffffff' : '#9ec8e6';
+      ctx.globalAlpha = (0.05 + rng() * 0.11) * (0.5 + theme.slab.strata * 0.7);
+      ctx.strokeStyle = rng() > 0.28 ? '#ffffff' : theme.slab.speckDark;
       ctx.lineWidth = 1 + rng() * 2.6;
 
       ctx.beginPath();
@@ -210,11 +205,14 @@
     ctx.restore();
   }
 
-  /** 石板内缘的霜花：沿四条边向内长出冰晶细枝。 */
-  function paintFrostBorder(ctx, rect, rng) {
-    var unit = Math.max(0.55, geom.cell / 40);
+  /** 石板内缘的霜花：沿四条边向内长出冰晶细枝（非冰系主题可关掉）。 */
+  function paintFrostBorder(ctx, rect, rng, theme) {
+    if (theme.slab.frost <= 0) return;
 
-    for (var i = 0; i < 46; i++) {
+    var unit = Math.max(0.55, geom.cell / 40);
+    var count = Math.round(46 * theme.slab.frost) + 6;
+
+    for (var i = 0; i < count; i++) {
       var side = Math.floor(rng() * 4);
       var t = rng();
       var depth = 2 + rng() * Math.max(9, geom.cell * 0.55);
@@ -242,22 +240,24 @@
         ctx, x, y,
         (7 + rng() * 17) * unit,
         angle,
-        0.05 + rng() * 0.12,
+        (0.05 + rng() * 0.12) * theme.slab.frost,
         (0.7 + rng() * 0.7) * unit,
         rng
       );
     }
   }
 
-  /** 冰晶颗粒：细细的亮点与冷色暗点，让平面不平。 */
-  function paintSpeckles(ctx, rect, rng) {
-    for (var i = 0; i < 1100; i++) {
+  /** 颗粒：细小的亮点与暗点，让平面不平（冰晶 / 沙粒 / 卵石）。 */
+  function paintSpeckles(ctx, rect, rng, theme) {
+    var count = Math.round(1100 * theme.slab.speckle);
+
+    for (var i = 0; i < count; i++) {
       var x = rect.x + rng() * rect.width;
       var y = rect.y + rng() * rect.height;
       var size = 0.5 + rng() * 1.5;
 
       ctx.globalAlpha = 0.04 + rng() * 0.12;
-      ctx.fillStyle = rng() > 0.42 ? '#ffffff' : '#6f9fc4';
+      ctx.fillStyle = rng() > 0.42 ? theme.slab.speckLight : theme.slab.speckDark;
       ctx.fillRect(x, y, size, size);
     }
 
@@ -265,51 +265,53 @@
   }
 
   /** 石板内缘的厚度感：四边向内渐暗 + 顶部一道亮边。 */
-  function paintInnerShade(ctx, rect) {
+  function paintInnerShade(ctx, rect, theme) {
     var d = Math.max(11, geom.cell * 0.44);
     var w = rect.width;
     var h = rect.height;
+    var ink = theme.slab.inner;
 
     var top = ctx.createLinearGradient(0, rect.y, 0, rect.y + d);
-    top.addColorStop(0, 'rgba(52, 100, 140, 0.22)');
-    top.addColorStop(1, 'rgba(52, 100, 140, 0)');
+    top.addColorStop(0, ink);
+    top.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = top;
     ctx.fillRect(rect.x, rect.y, w, d);
 
     var bottom = ctx.createLinearGradient(0, rect.y + h - d, 0, rect.y + h);
-    bottom.addColorStop(0, 'rgba(52, 104, 148, 0)');
-    bottom.addColorStop(1, 'rgba(44, 92, 134, 0.24)');
+    bottom.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    bottom.addColorStop(1, ink);
     ctx.fillStyle = bottom;
     ctx.fillRect(rect.x, rect.y + h - d, w, d);
 
     var left = ctx.createLinearGradient(rect.x, 0, rect.x + d, 0);
-    left.addColorStop(0, 'rgba(52, 100, 140, 0.18)');
-    left.addColorStop(1, 'rgba(52, 100, 140, 0)');
+    left.addColorStop(0, ink);
+    left.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = left;
     ctx.fillRect(rect.x, rect.y, d, h);
 
     var right = ctx.createLinearGradient(rect.x + w - d, 0, rect.x + w, 0);
-    right.addColorStop(0, 'rgba(52, 100, 140, 0)');
-    right.addColorStop(1, 'rgba(44, 92, 134, 0.2)');
+    right.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    right.addColorStop(1, ink);
     ctx.fillStyle = right;
     ctx.fillRect(rect.x + w - d, rect.y, d, h);
 
     // 顶部受光的一道亮边
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillStyle = theme.slab.shine;
     ctx.fillRect(rect.x + 1, rect.y + 1, w - 2, 1.2);
   }
 
-  /** 画石板本体（缓存贴图的绘制内容）。 */
-  function paintPlate(ctx, rect, radius) {
-    var rng = Art.rngFrom(0x5A17B0);
+  /** 画石板本体（缓存贴图的绘制内容），材质全部来自主题。 */
+  function paintPlate(ctx, rect, radius, theme) {
+    var slab = theme.slab;
+    var rng = Art.rngFrom(0x5A17B0 ^ (theme.id.length * 131));
     var w = rect.width;
     var h = rect.height;
 
-    // ① 外发光：石板像嵌在发光的冰壁里
+    // ① 外发光：石板像嵌在会发光的背景里
     ctx.save();
-    ctx.shadowColor = 'rgba(118, 198, 244, 0.55)';
+    ctx.shadowColor = slab.rimMid;
     ctx.shadowBlur = Math.max(10, geom.cell * 0.52);
-    ctx.strokeStyle = 'rgba(180, 228, 255, 0.8)';
+    ctx.strokeStyle = slab.rimLight;
     ctx.lineWidth = 1.6;
     Art.roundRectPath(ctx, rect.x, rect.y, w, h, radius);
     ctx.stroke();
@@ -335,41 +337,41 @@
     Art.clipRoundRect(ctx, rect.x, rect.y, w, h, radius);
 
     var base = ctx.createLinearGradient(0, rect.y, 0, rect.y + h);
-    base.addColorStop(0, COLORS.boardTop);
-    base.addColorStop(0.52, COLORS.boardMid);
-    base.addColorStop(1, COLORS.boardBottom);
+    base.addColorStop(0, slab.top);
+    base.addColorStop(0.52, slab.mid);
+    base.addColorStop(1, slab.bottom);
     ctx.fillStyle = base;
     ctx.fillRect(rect.x, rect.y, w, h);
 
-    // 左上大面积柔光 + 右下冷影，撑出体积
+    // 左上大面积柔光 + 右下阴影，撑出体积
     Art.softEllipse(ctx, rect.x + w * 0.26, rect.y + h * 0.13, w * 0.74, h * 0.56,
-      'rgba(255, 255, 255, 0.5)', 'rgba(255, 255, 255, 0)');
+      slab.shine, 'rgba(255, 255, 255, 0)');
     Art.softEllipse(ctx, rect.x + w * 0.9, rect.y + h * 0.96, w * 0.64, h * 0.48,
-      'rgba(86, 140, 182, 0.22)', 'rgba(86, 140, 182, 0)');
+      slab.shade, 'rgba(0, 0, 0, 0)');
 
-    paintIceStrata(ctx, rect, rng);
-    paintFrostBorder(ctx, rect, rng);
-    paintSpeckles(ctx, rect, rng);
-    paintInnerShade(ctx, rect);
+    paintIceStrata(ctx, rect, rng, theme);
+    paintFrostBorder(ctx, rect, rng, theme);
+    paintSpeckles(ctx, rect, rng, theme);
+    paintInnerShade(ctx, rect, theme);
 
     ctx.restore();
 
-    // ④ 内圈倒角：左上亮、右下冷，做出石板的厚度
+    // ④ 内圈倒角：左上亮、右下暗，做出石板的厚度
     var bevel = ctx.createLinearGradient(rect.x, rect.y, rect.x + w, rect.y + h);
-    bevel.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-    bevel.addColorStop(0.45, 'rgba(200, 230, 250, 0.32)');
-    bevel.addColorStop(1, 'rgba(96, 146, 186, 0.55)');
+    bevel.addColorStop(0, slab.bevelLight);
+    bevel.addColorStop(0.45, slab.bevelMid);
+    bevel.addColorStop(1, slab.bevelDark);
 
     ctx.strokeStyle = bevel;
     ctx.lineWidth = 2;
     Art.roundRectPath(ctx, rect.x + 1, rect.y + 1, w - 2, h - 2, Math.max(2, radius - 1));
     ctx.stroke();
 
-    // ⑤ 外圈：上缘冰白、下缘蓝灰
+    // ⑤ 外圈
     var rim = ctx.createLinearGradient(rect.x, rect.y, rect.x + w, rect.y + h);
-    rim.addColorStop(0, 'rgba(232, 248, 255, 0.95)');
-    rim.addColorStop(0.5, 'rgba(168, 212, 240, 0.85)');
-    rim.addColorStop(1, 'rgba(104, 158, 202, 0.85)');
+    rim.addColorStop(0, slab.rimLight);
+    rim.addColorStop(0.5, slab.rimMid);
+    rim.addColorStop(1, slab.rimDark);
 
     ctx.strokeStyle = rim;
     ctx.lineWidth = 2.4;
@@ -377,19 +379,20 @@
     ctx.stroke();
   }
 
-  /** 没有离屏画布时的退路：直接画一层渐变石板（丢失冰纹细节，但保证能看）。 */
-  function drawPlateFallback(ctx, rect, radius) {
+  /** 没有离屏画布时的退路：直接画一层渐变石板（丢失纹理细节，但保证能看）。 */
+  function drawPlateFallback(ctx, rect, radius, theme) {
+    var slab = theme.slab;
     var base = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.height);
-    base.addColorStop(0, COLORS.boardTop);
-    base.addColorStop(0.52, COLORS.boardMid);
-    base.addColorStop(1, COLORS.boardBottom);
+    base.addColorStop(0, slab.top);
+    base.addColorStop(0.52, slab.mid);
+    base.addColorStop(1, slab.bottom);
 
     ctx.save();
     ctx.fillStyle = base;
     Art.roundRectPath(ctx, rect.x, rect.y, rect.width, rect.height, radius);
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(210, 238, 255, 0.9)';
+    ctx.strokeStyle = slab.rimLight;
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
@@ -398,10 +401,11 @@
   // ── 格子线 ──────────────────────────────────────────────────────────────
 
   /**
-   * 棋盘线：一条暗刻痕 + 一条偏右下的高光，读起来像冰面被划出的凹槽。
+   * 棋盘线：一条暗刻痕 + 一条偏右下的高光，读起来像被划出的凹槽。
    * 线宽 1 落在整数坐标上会糊，统一偏移半像素。
    */
-  function drawGrid(ctx, n) {
+  function drawGrid(ctx, n, theme) {
+    var slab = theme.slab;
     var start = geom.origin;
     var end = geom.origin + (n - 1) * geom.cell;
     var i, pos;
@@ -418,7 +422,7 @@
       ctx.moveTo(start, pos);
       ctx.lineTo(end, pos);
     }
-    ctx.strokeStyle = COLORS.gridLine;
+    ctx.strokeStyle = slab.grid;
     ctx.stroke();
 
     ctx.beginPath();
@@ -429,18 +433,19 @@
       ctx.moveTo(start, pos);
       ctx.lineTo(end, pos);
     }
-    ctx.strokeStyle = COLORS.gridHighlight;
+    ctx.strokeStyle = slab.gridHi;
     ctx.stroke();
 
     // 最外圈加重，棋盘边界更清晰
-    ctx.strokeStyle = COLORS.gridEdge;
+    ctx.strokeStyle = slab.gridEdge;
     ctx.lineWidth = 2;
     ctx.strokeRect(start, start, end - start, end - start);
     ctx.restore();
   }
 
-  /** 星位：一枚嵌进冰面的小菱形冰晶。 */
-  function drawStarPoints(ctx, n) {
+  /** 星位：一枚嵌进石面的小菱形晶体。 */
+  function drawStarPoints(ctx, n, theme) {
+    var slab = theme.slab;
     var points = B.starPoints({ size: n });
     var r = Math.max(2, geom.cell * 0.085);
 
@@ -449,30 +454,36 @@
       var p = pointToPixel(points[i].x, points[i].y);
 
       Art.starPath(ctx, p.px, p.py, r * 1.7, r * 0.5, 4, Math.PI / 4);
-      ctx.fillStyle = COLORS.starPoint;
+      ctx.fillStyle = slab.point;
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(p.px - r * 0.42, p.py - r * 0.42, Math.max(0.7, r * 0.42), 0, Math.PI * 2);
-      ctx.fillStyle = COLORS.starSpark;
+      ctx.fillStyle = slab.pointSpark;
       ctx.fill();
     }
     ctx.restore();
   }
 
-  /** 第二层：石板 + 格子线 + 星位。 */
-  function drawBoard(ctx, state) {
+  /**
+   * 第二层：石板 + 格子线 + 星位。
+   * @param {string} [modeId] 显式模式 id（决定石板材质；缺省按 arenaState 推断）
+   */
+  function drawBoard(ctx, state, modeId) {
     var n = gridSizeOf(state);
-    var entry = ensurePlate(state);
+    var theme = Theme.get(Theme.idOf(state, modeId));
+    var entry = ensurePlate(state, theme);
+
+    themeNow = theme;
 
     ctx.save();
 
     if (!entry.surface || !Art.blitSurface(ctx, entry.surface)) {
-      drawPlateFallback(ctx, entry.rect, entry.radius);
+      drawPlateFallback(ctx, entry.rect, entry.radius, theme);
     }
 
-    drawGrid(ctx, n);
-    drawStarPoints(ctx, n);
+    drawGrid(ctx, n, theme);
+    drawStarPoints(ctx, n, theme);
     ctx.restore();
   }
 
@@ -487,13 +498,13 @@
    */
   var gradCache = { owner: null, map: {} };
 
-  function gradientsFor(ctx, radius, player) {
+  function gradientsFor(ctx, radius, player, theme) {
     if (gradCache.owner !== ctx) {
       gradCache.owner = ctx;
       gradCache.map = {};
     }
 
-    var key = player + '|' + Math.round(radius * 8);
+    var key = theme.id + '|' + player + '|' + Math.round(radius * 8);
     if (gradCache.map[key]) return gradCache.map[key];
 
     var r = radius;
@@ -523,14 +534,15 @@
       body.addColorStop(1, '#c2d8e9');
     }
 
+    // 下缘反光跟着场景走：冰蓝 / 青绿 / 暖橙
     var rim = ctx.createRadialGradient(0, r * 0.46, r * 0.1, 0, r * 0.46, r * 1.05);
 
     if (isBlack) {
-      rim.addColorStop(0, COLORS.blackRim);
-      rim.addColorStop(1, 'rgba(122, 198, 240, 0)');
+      rim.addColorStop(0, theme.stone.rim);
+      rim.addColorStop(1, 'rgba(0, 0, 0, 0)');
     } else {
-      rim.addColorStop(0, COLORS.whiteRim);
-      rim.addColorStop(1, 'rgba(146, 186, 216, 0)');
+      rim.addColorStop(0, theme.stone.whiteRim);
+      rim.addColorStop(1, 'rgba(0, 0, 0, 0)');
     }
 
     var set = {
@@ -538,7 +550,7 @@
       body: body,
       rim: rim,
       edge: isBlack ? COLORS.blackEdge : COLORS.whiteEdge,
-      arcHi: isBlack ? 'rgba(196, 232, 255, 0.5)' : 'rgba(255, 255, 255, 0.95)'
+      arcHi: isBlack ? theme.stone.arc : 'rgba(255, 255, 255, 0.95)'
     };
 
     gradCache.map[key] = set;
@@ -555,10 +567,11 @@
     var r = geom.cell * T.STONE_RADIUS_RATIO;
     var seed = Art.hash01(Math.round(px * 3.1), Math.round(py * 3.7));
     var tilt = (seed - 0.5) * 0.85;
-    var g = gradientsFor(ctx, r, player);
+    var g = gradientsFor(ctx, r, player, themeNow);
 
     ctx.save();
-    ctx.globalAlpha = ghost ? 0.42 : 1;
+    // 与调用方已设的透明度相乘（落子弹入要淡入，不能直接覆盖）
+    ctx.globalAlpha = ctx.globalAlpha * (ghost ? 0.42 : 1);
     ctx.translate(px, py);
 
     // ① 接地阴影
@@ -750,10 +763,13 @@
    *
    * @param {object} state GameState
    * @param {object|null} [ghost] { x, y, player } 鼠标悬停预览
+   * @param {string} [modeId] 显式模式 id（决定棋子下缘反光取哪个场景的色）
    */
-  function drawPieces(ctx, state, ghost) {
+  function drawPieces(ctx, state, ghost, modeId) {
     var board = state;
     var n = gridSizeOf(state);
+
+    themeNow = Theme.get(Theme.idOf(state, modeId));
 
     // 新落一手 / 刚成五：只记时间戳，不改任何游戏数据
     var stamp = state.lastMove

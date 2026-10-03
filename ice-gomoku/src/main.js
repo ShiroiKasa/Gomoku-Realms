@@ -25,6 +25,7 @@
   var River = G.River;
   var Mine = G.Mine;
   var Modes = G.Modes;
+  var RenderScene = G.Render.Scene;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
 
@@ -118,6 +119,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     var margin = computeMargin(boardPx);
+    RenderScene.configure(boardPx, margin, dpr);
     RenderBoard.configure(boardPx, margin, dpr);
     RenderArena.configure(boardPx, margin, dpr);
 
@@ -147,7 +149,8 @@
 
       var stamp = typeof now === 'number' ? now : 0;
 
-      // 推进动画时钟（雪花飘落、水纹、闪光、棋子弹入、五连辉光）
+      // 推进各层时钟（场景粒子、水纹与闪光、棋子弹入、五连辉光）
+      RenderScene.tick(stamp);
       RenderArena.tick(stamp);
       RenderBoard.tick(stamp);
 
@@ -159,12 +162,13 @@
 
   /**
    * 渲染分七层，顺序固定：
-   *   drawScene（洞穴背景）→ drawBoard（石板/格线/星位）→ drawArena（场地，棋子之下）
+   *   drawScene（场景背景，按模式主题）→ drawBoard（石板/格线/星位）→ drawArena（场地，棋子之下）
    *   → drawPieces（棋子）→ drawMinePreview（雷区悬停）→ drawArenaOverlay（冰块等，棋子之上）
-   *   → drawAtmosphere（冷光/霜花/前景雪/暗角/胜利聚焦，最上层）
+   *   → drawAtmosphere（光柱/边缘霜尘雾/前景粒子/暗角/胜利聚焦，最上层）
    *
    * 冰块、雷区数字必须画在棋子之后，否则压不住棋子；
    * 氛围层必须最后画，否则压不住任何东西。
+   * 场景与石板都按 appState.mode 选主题（见 render/theme.js），所以要显式传下去。
    */
   function render() {
     // 菜单界面下画布不可见，也不该继续绘制
@@ -174,13 +178,15 @@
 
     var ghost = ghostFromHover();
 
-    RenderArena.drawScene(ctx, state);              // 洞穴背景（石板之下）
-    RenderBoard.drawBoard(ctx, state);              // 石板 + 格子线 + 星位
+    var mode = appState.mode;
+
+    RenderScene.drawScene(ctx, state, mode);        // 场景背景（石板之下）
+    RenderBoard.drawBoard(ctx, state, mode);        // 石板 + 格子线 + 星位
     RenderArena.drawArena(ctx, state, ghost);       // 场地（棋子之下）
-    RenderBoard.drawPieces(ctx, state, ghost);      // 棋子
+    RenderBoard.drawPieces(ctx, state, ghost, mode);// 棋子
     RenderArena.drawMinePreview(ctx, state, ghost); // 雷区悬停：3×3 爆炸范围
     RenderArena.drawArenaOverlay(ctx, state);       // 冰块/水波/水位条/雷区数字
-    RenderArena.drawAtmosphere(ctx, state);         // 氛围与胜利聚焦（最上层）
+    RenderScene.drawAtmosphere(ctx, state, mode);   // 氛围与胜利聚焦（最上层）
 
     updateHud();
   }
@@ -456,7 +462,8 @@
       state.arenaState = null;   // 经典模式没有场地
     }
 
-    // 清掉上一局残留的动画痕迹（闪光、雪花、水波、爆炸、弹入、五连辉光）
+    // 清掉上一局残留的动画痕迹（场景粒子、闪光、水波、爆炸、弹入、五连辉光）
+    RenderScene.resetEffects();
     RenderArena.resetEffects();
     RenderBoard.resetEffects();
 

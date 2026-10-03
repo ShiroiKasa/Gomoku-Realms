@@ -1,16 +1,15 @@
 /**
- * 五子奇境 · 洞穴场景与各场地特效绘制
+ * 五子奇境 · 各场地覆盖物绘制（冰锥 / 河流 / 雷区）
  *
  * 绘制时机（由 main.js 的 render() 依次调用）：
- *   drawScene         —— 洞穴背景：岩壁、冰柱、角落冰晶、地面积雪、背景飘雪（石板之下）
  *   drawArena         —— 场地覆盖物：冰锥预警 / 河流 / 雷区底盘（棋子之下）
  *   drawMinePreview   —— 雷区悬停的 3×3 爆炸范围（棋子之上）
  *   drawArenaOverlay  —— 冰块 / 水波 / 水位条 / 雷区数字 / 爆炸闪光（棋子之上）
- *   drawAtmosphere    —— 斜向冷光、边缘霜花、前景大雪、环境色偏、暗角、胜利聚焦（最上层）
  *
+ * 场景背景与氛围层在 render/scene.js（按模式主题），石板在 render/board.js。
  * 本文件只读 state 与 state.arenaState，不改任何状态；规则结算在 core/ 各自的文件里。
- * 与棋盘共用的几何（石板矩形 / 圆角）与配色（石板上下两色）一律从 render/art.js 与
- * render/board.js 取，避免两处各写一份色值导致河流淡出露接缝（历史坑）。
+ * 与棋盘共用的几何（石板矩形 / 圆角）走 render/art.js，河流淡出的两端色值走
+ * render/theme.js 的石板配色，杜绝两处各写一份导致淡出露接缝（历史坑）。
  *
  * 坐标系：逻辑坐标以 CSS 像素为单位，原点在画布左上角。
  */
@@ -24,6 +23,7 @@
   var River = G.River;
   var Mine = G.Mine;
   var Art = G.Render.Art;
+  var Theme = G.Render.Theme;
 
   // ── 几何参数（由 configure 写入）──────────────────────────────────────────
   var geom = {
@@ -34,23 +34,9 @@
     dpr: 1
   };
 
-  /** 最近一次算出的石板矩形，供雪/雨的落点范围复用（不参与规则）。 */
-  var lastRect = null;
-
   var COLORS = {
-    // 洞穴
-    caveTop: '#07101c',
-    caveBottom: '#03060c',
-    caveGlow: 'rgba(96, 180, 230, 0.20)',
-    ceiling: 'rgba(190, 228, 255, 0.14)',
-    floorSnow: 'rgba(226, 246, 255, 0.16)',
-    iceEdge: 'rgba(226, 244, 255, 0.45)',
-    snow: 'rgba(236, 248, 255, 0.85)',
-    shaft: 'rgba(150, 210, 255, 0.055)',
-
     // 冰锥预警
     spike: '#4A90D9',
-    spikeFill: 'rgba(120, 184, 234, 0.85)',
     spikeSheen: 'rgba(232, 248, 255, 0.85)',
     spikeOnStone: 'rgba(178, 224, 255, 0.95)',
     spikeRing: 'rgba(146, 206, 244, 0.5)',
@@ -101,11 +87,7 @@
     minePreviewEdge: 'rgba(240, 120, 100, 0.7)',
     blast: 'rgba(255, 238, 214, 0.95)',
     blastRing: 'rgba(255, 168, 96, 0.9)',
-    blastSpark: 'rgba(255, 196, 130, 0.9)',
-
-    // 氛围
-    vignette: 'rgba(2, 6, 12, 0.55)',
-    winVeil: 'rgba(4, 10, 18, 0.34)'
+    blastSpark: 'rgba(255, 196, 130, 0.9)'
   };
 
   // ── 时间与动画 ──────────────────────────────────────────────────────────
@@ -115,14 +97,10 @@
   var BLAST_MS = 300;       // 雷区爆炸的闪光时长
   var MINE_BLINK_MS = 420;  // 倒计时紧迫时的闪烁周期
   var RAIN_STREAK_COUNT = 30;
-  var FRONT_SNOW_COUNT = 8;
-  var SNOW_DENSITY = 0.09;  // 背景雪花数 = 画布边长 × 该系数（夹在 18..72）
 
   var clock = 0;            // 由 main.js 主循环推进的时钟（毫秒）
   var lastClock = 0;
-  var snowflakes = null;    // 背景飘雪，延迟初始化
-  var frontSnow = null;     // 前景大雪（氛围层），延迟初始化
-  var rainStreaks = null;   // 雨丝
+  var rainStreaks = null;   // 雨丝（河流带内）
 
   /** 冰锥落下动画：{ "x,y": 起始时刻 }。只影响绘制，不参与规则。 */
   var knockAt = {};
@@ -144,9 +122,6 @@
     // 先按默认路数算一次格距：configure 之后、首次绘制之前也可能被问到坐标
     // （boardRect / cellBox），此时 geom.cell 不能是 0。
     geom.cell = (size - margin * 2) / (T.DEFAULT_SIZE - 1);
-
-    cave = null;
-    frostOverlay = null;
   }
 
   /** 取当前对局的路数，并据此更新格距（与 render/board.js 保持一致）。 */
@@ -158,8 +133,7 @@
 
   /** 返回石板区域（CSS 像素）。与 render/board.js 的 slabRect 同口径。 */
   function boardRect(state) {
-    lastRect = Art.boardRectOf(geom, gridSizeOf(state));
-    return lastRect;
+    return Art.boardRectOf(geom, gridSizeOf(state));
   }
 
   /** 把后续绘制裁剪进石板（含圆角，避免河流等溢出石板切角）。 */
@@ -186,7 +160,7 @@
   // ── 动画时钟 ────────────────────────────────────────────────────────────
 
   /**
-   * 推进本模块的动画时钟。
+   * 推进本模块的动画时钟（水波、爆炸余晖、紧迫闪烁都按它衰减）。
    * @param {number} nowMs 来自 performance.now() / rAF 的时间戳
    */
   function tick(nowMs) {
@@ -196,8 +170,6 @@
     lastClock = nowMs;
     clock += dt;
 
-    stepSnow(dt);
-    stepFrontSnow(dt);
     stepRain(dt);
   }
 
@@ -240,516 +212,13 @@
     }
   }
 
-  /** 清空动画痕迹（重开时调用）。场景贴图与岩壁形状按尺寸缓存，不在这里清。 */
+  /** 清空动画痕迹（重开时调用）。 */
   function resetEffects() {
     knockAt = {};
     rippleAt = {};
     blastAt = {};
-    snowflakes = null;
-    frontSnow = null;
     rainStreaks = null;
     lastClock = clock;
-  }
-
-  // ── 雪花 ────────────────────────────────────────────────────────────────
-
-  /** 边框带（石板之外的可见区域）内随机取一点。 */
-  function bandX(range) {
-    var rect = lastRect || Art.boardRectOf(geom, T.DEFAULT_SIZE);
-    var inset = Math.max(4, rect.x);
-    var size = geom.size;
-
-    // 七成雪花落在左右边框里——那里的雪一定看得见；
-    // 其余落在顶部横带，落下后会没入石板之后（物理上也说得通）。
-    if (range() < 0.7) {
-      return range() < 0.5
-        ? range() * inset
-        : size - range() * inset;
-    }
-
-    return range() * size;
-  }
-
-  function makeFlake(range, py) {
-    var depth = 0.45 + range() * 0.55;
-
-    return {
-      x: bandX(range),
-      y: py === undefined ? -6 : py,
-      depth: depth,
-      r: (0.5 + range() * 1.3) * depth,
-      vy: (7 + range() * 16) * depth,
-      drift: range() * Math.PI * 2,
-      spin: (range() - 0.5) * 0.6
-    };
-  }
-
-  function initSnow() {
-    snowflakes = [];
-
-    var count = Math.max(18, Math.min(72, Math.round(geom.size * SNOW_DENSITY)));
-
-    for (var i = 0; i < count; i++) {
-      snowflakes.push(makeFlake(Math.random, Math.random() * geom.size));
-    }
-  }
-
-  function stepSnow(dt) {
-    if (!snowflakes) return;
-
-    var seconds = dt / 1000;
-
-    for (var i = 0; i < snowflakes.length; i++) {
-      var f = snowflakes[i];
-      f.drift += seconds * (0.8 + f.depth);
-      f.y += f.vy * seconds;
-      f.x += Math.sin(f.drift) * 7 * seconds;
-
-      if (f.y > geom.size + 6) snowflakes[i] = makeFlake(Math.random, -6 - Math.random() * 20);
-    }
-  }
-
-  function initFrontSnow() {
-    frontSnow = [];
-
-    for (var i = 0; i < FRONT_SNOW_COUNT; i++) {
-      frontSnow.push({
-        x: Math.random() * geom.size,
-        y: Math.random() * geom.size,
-        r: 1.6 + Math.random() * 2.6,
-        vy: 9 + Math.random() * 12,
-        sway: Math.random() * Math.PI * 2,
-        spin: Math.random() * Math.PI * 2,
-        alpha: 0.1 + Math.random() * 0.14
-      });
-    }
-  }
-
-  function stepFrontSnow(dt) {
-    if (!frontSnow) return;
-
-    var seconds = dt / 1000;
-
-    for (var i = 0; i < frontSnow.length; i++) {
-      var f = frontSnow[i];
-      f.sway += seconds * 0.5;
-      f.spin += seconds * 0.35;
-      f.y += f.vy * seconds;
-      f.x += Math.sin(f.sway) * 11 * seconds;
-
-      if (f.y > geom.size + 8) {
-        f.y = -8;
-        f.x = Math.random() * geom.size;
-      }
-      if (f.x < -8) f.x = geom.size + 8;
-      if (f.x > geom.size + 8) f.x = -8;
-    }
-  }
-
-  function drawSnow(ctx) {
-    if (!snowflakes) initSnow();
-
-    ctx.save();
-    ctx.fillStyle = COLORS.snow;
-
-    for (var i = 0; i < snowflakes.length; i++) {
-      var f = snowflakes[i];
-      ctx.globalAlpha = (0.2 + f.depth * 0.45);
-
-      if (f.r > 1.35) {
-        Art.starPath(ctx, f.x, f.y, f.r * 1.5, f.r * 0.5, 6, f.drift * 0.3);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    ctx.restore();
-  }
-
-  // ── 洞穴岩壁（形状按尺寸缓存，每帧只画不算）────────────────────────────
-
-  var cave = null;
-
-  /** 上下左右的冰锥 / 冰晶 / 侧壁刻面形状。只在画布尺寸变化时重建。 */
-  function ensureCave(state) {
-    var rect = boardRect(state);
-    var key = geom.size + '|' + geom.margin + '|' + geom.cell + '|' + geom.dpr;
-
-    if (cave && cave.key === key && cave.owner === caveCtx) return cave;
-
-    var inset = Math.max(6, rect.x);
-    var size = geom.size;
-    var rng = Art.rngFrom(0x1CE0FF);
-    var shapes = {
-      key: key,
-      owner: caveCtx,
-      inset: inset,
-      rect: rect,
-      top: [],
-      bottom: [],
-      facets: [],
-      crystals: [],
-      drifts: []
-    };
-
-    // 顶部冰锥：远近两层，远处更长更淡，近处短而亮
-    var topCount = Math.max(6, Math.round(size / (inset * 1.15)));
-    var i, x, far;
-
-    for (i = 0; i < topCount; i++) {
-      far = rng() > 0.45;
-      x = (i + 0.5) * (size / topCount) + (rng() - 0.5) * inset * 0.7;
-
-      shapes.top.push({
-        x: x,
-        w: inset * (far ? 0.3 : 0.44) * (0.7 + rng() * 0.9),
-        len: inset * (far ? 1.2 + rng() * 1.5 : 0.5 + rng() * 0.95),
-        lean: (rng() - 0.5) * inset * 0.4,
-        alpha: far ? 0.5 : 1,
-        glint: rng() > 0.4
-      });
-    }
-
-    // 底部石笋（向上长）：比顶部冰锥矮一截，免得抢戏
-    var botCount = Math.max(4, Math.round(size / (inset * 2.1)));
-
-    for (i = 0; i < botCount; i++) {
-      x = (i + 0.5) * (size / botCount) + (rng() - 0.5) * inset * 0.8;
-
-      shapes.bottom.push({
-        x: x,
-        w: inset * (0.45 + rng() * 0.75),
-        len: inset * (0.26 + rng() * 0.5),
-        lean: (rng() - 0.5) * inset * 0.4,
-        alpha: 0.5 + rng() * 0.35
-      });
-    }
-
-    // 左右侧壁：斜向的冰层刻面
-    var sideCount = Math.max(5, Math.round(size / (inset * 1.6)));
-
-    for (i = 0; i < sideCount; i++) {
-      var y = (i + 0.5) * (size / sideCount) + (rng() - 0.5) * inset;
-
-      shapes.facets.push({
-        y: y,
-        h: inset * (0.8 + rng() * 1.3),
-        depth: inset * (0.35 + rng() * 0.8),
-        skew: (rng() - 0.5) * inset * 0.5,
-        alpha: 0.5 + rng() * 0.5,
-        right: rng() > 0.5
-      });
-    }
-
-    // 四角的冰晶簇：四条边的交汇处最容易堆冰
-    var corners = [
-      { x: 0, y: 0, dx: 1, dy: 1 },
-      { x: size, y: 0, dx: -1, dy: 1 },
-      { x: 0, y: size, dx: 1, dy: -1 },
-      { x: size, y: size, dx: -1, dy: -1 }
-    ];
-
-    for (i = 0; i < corners.length; i++) {
-      var c = corners[i];
-      var cluster = { x: c.x, y: c.y, shards: [] };
-      var shardCount = 3 + Math.floor(rng() * 3);
-
-      for (var k = 0; k < shardCount; k++) {
-        cluster.shards.push({
-          along: rng() * inset * 1.25,      // 沿水平边的偏移
-          w: inset * (0.16 + rng() * 0.26),
-          len: inset * (0.55 + rng() * 1.15),
-          spread: (rng() - 0.5) * 0.9
-        });
-      }
-
-      cluster.dx = c.dx;
-      cluster.dy = c.dy;
-      shapes.crystals.push(cluster);
-    }
-
-    // 地面积雪：底部几条起伏的雪堆
-    var driftCount = Math.max(4, Math.round(size / (inset * 1.9)));
-
-    for (i = 0; i < driftCount; i++) {
-      x = (i + 0.5) * (size / driftCount) + (rng() - 0.5) * inset;
-      shapes.drifts.push({
-        x: x,
-        rx: inset * (1.1 + rng() * 1.9),
-        ry: inset * (0.22 + rng() * 0.34),
-        alpha: 0.5 + rng() * 0.5
-      });
-    }
-
-    // 渐变与形状一起缓存：它们只依赖尺寸，可以给所有同类形状共用
-    shapes.topGrad = ctxGradient(caveCtx, 0, 0, 0, size * 0.5, [
-      [0, 'rgba(214, 240, 255, 0.42)'],
-      [0.18, 'rgba(152, 206, 246, 0.22)'],
-      [0.6, 'rgba(110, 170, 215, 0.06)'],
-      [1, 'rgba(110, 170, 215, 0)']
-    ]);
-
-    shapes.bottomGrad = ctxGradient(caveCtx, 0, size, 0, size * 0.5, [
-      [0, 'rgba(178, 220, 255, 0.34)'],
-      [0.35, 'rgba(132, 192, 240, 0.13)'],
-      [1, 'rgba(112, 172, 222, 0)']
-    ]);
-
-    shapes.leftGrad = ctxGradient(caveCtx, 0, 0, inset * 1.5, 0, [
-      [0, 'rgba(190, 228, 255, 0.2)'],
-      [0.5, 'rgba(140, 195, 238, 0.08)'],
-      [1, 'rgba(120, 180, 220, 0)']
-    ]);
-
-    shapes.rightGrad = ctxGradient(caveCtx, size, 0, size - inset * 1.5, 0, [
-      [0, 'rgba(190, 228, 255, 0.2)'],
-      [0.5, 'rgba(140, 195, 238, 0.08)'],
-      [1, 'rgba(120, 180, 220, 0)']
-    ]);
-
-    shapes.cornerGrads = [];
-
-    for (i = 0; i < corners.length; i++) {
-      shapes.cornerGrads.push(ctxGradient(
-        caveCtx, corners[i].x, corners[i].y, corners[i].x, corners[i].y,
-        [
-          [0, 'rgba(206, 238, 255, 0.3)'],
-          [1, 'rgba(150, 200, 240, 0)']
-        ],
-        inset * 2.6
-      ));
-    }
-
-    cave = shapes;
-    return cave;
-  }
-
-  /** 建一个带 stops 的线性渐变。 */
-  function ctxGradient(ctx, x0, y0, x1, y1, stops) {
-    var grad = ctx.createLinearGradient(x0, y0, x1, y1);
-
-    for (var i = 0; i < stops.length; i++) {
-      grad.addColorStop(stops[i][0], stops[i][1]);
-    }
-
-    return grad;
-  }
-
-  /** 当前正在绘制的上下文（用于按 ctx 重建渐变缓存）。 */
-  var caveCtx = null;
-
-  /** 向下 / 向上的冰锥路径。dir = 1 向下（挂顶），-1 向上（长在底部）。 */
-  function shardPath(ctx, cx, baseY, width, height, lean, dir) {
-    var half = width / 2;
-    var tipY = baseY + height * dir;
-
-    ctx.beginPath();
-    ctx.moveTo(cx - half, baseY);
-    ctx.quadraticCurveTo(cx - half * 0.55, baseY + height * 0.45 * dir, cx + lean, tipY);
-    ctx.quadraticCurveTo(cx + half * 0.55, baseY + height * 0.45 * dir, cx + half, baseY);
-    ctx.closePath();
-  }
-
-  /** 洞穴天花板 / 地面 / 侧壁 / 冰晶簇。 */
-  function drawCaveIce(ctx, state) {
-    var shapes = ensureCave(state);
-    var size = geom.size;
-    var inset = shapes.inset;
-    var i;
-
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    // 天花板与地面：一条起伏的冰带，压住画布上下缘
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = COLORS.ceiling;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(size, 0);
-    ctx.lineTo(size, inset * 0.18);
-    for (i = 6; i >= 0; i--) {
-      var tx = (size / 6) * i;
-      var ty = inset * (0.12 + 0.1 * Math.abs(Math.sin(i * 1.7)));
-      ctx.lineTo(tx, ty);
-    }
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = COLORS.floorSnow;
-    ctx.beginPath();
-    ctx.moveTo(0, size);
-    ctx.lineTo(size, size);
-    ctx.lineTo(size, size - inset * 0.14);
-    for (i = 6; i >= 0; i--) {
-      var fx = (size / 6) * i;
-      var fy = size - inset * (0.1 + 0.09 * Math.abs(Math.cos(i * 2.1)));
-      ctx.lineTo(fx, fy);
-    }
-    ctx.closePath();
-    ctx.fill();
-
-    // 地面雪堆
-    for (i = 0; i < shapes.drifts.length; i++) {
-      var d = shapes.drifts[i];
-      ctx.globalAlpha = 0.5 * d.alpha;
-      Art.softEllipse(ctx, d.x, size - d.ry * 0.3, d.rx, d.ry,
-        'rgba(226, 246, 255, 0.5)', 'rgba(226, 246, 255, 0)');
-    }
-
-    // 侧壁刻面
-    ctx.globalAlpha = 1;
-    for (i = 0; i < shapes.facets.length; i++) {
-      var f = shapes.facets[i];
-      var x0 = f.right ? size : 0;
-      var dx = (f.right ? -1 : 1) * f.depth;
-
-      ctx.globalAlpha = 0.55 * f.alpha;
-      ctx.beginPath();
-      ctx.moveTo(x0, f.y - f.h * 0.45);
-      ctx.lineTo(x0 + dx, f.y - f.h * 0.2 + f.skew);
-      ctx.lineTo(x0 + dx * 0.7, f.y + f.h * 0.5);
-      ctx.lineTo(x0, f.y + f.h * 0.75);
-      ctx.closePath();
-      ctx.fillStyle = f.right ? shapes.rightGrad : shapes.leftGrad;
-      ctx.fill();
-
-      ctx.globalAlpha = 0.3 * f.alpha;
-      ctx.strokeStyle = COLORS.iceEdge;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-
-    // 顶部冰锥：先远后近
-    ctx.globalAlpha = 1;
-
-    for (i = 0; i < shapes.top.length; i++) {
-      var s = shapes.top[i];
-      ctx.globalAlpha = s.alpha;
-
-      shardPath(ctx, s.x, 0, s.w, s.len, s.lean, 1);
-      ctx.fillStyle = shapes.topGrad;
-      ctx.fill();
-
-      ctx.globalAlpha = s.alpha * 0.5;
-      ctx.strokeStyle = COLORS.iceEdge;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      if (s.glint) {
-        ctx.globalAlpha = s.alpha * 0.9;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-        ctx.beginPath();
-        ctx.arc(s.x + s.lean * 0.8, s.len * 0.86, Math.max(0.6, inset * 0.026), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    // 底部石笋
-    for (i = 0; i < shapes.bottom.length; i++) {
-      var b = shapes.bottom[i];
-      ctx.globalAlpha = b.alpha;
-
-      shardPath(ctx, b.x, size, b.w, b.len, b.lean, -1);
-      ctx.fillStyle = shapes.bottomGrad;
-      ctx.fill();
-
-      ctx.globalAlpha = b.alpha * 0.22;
-      ctx.strokeStyle = COLORS.iceEdge;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-
-    // 四角冰晶簇
-    for (i = 0; i < shapes.crystals.length; i++) {
-      var cluster = shapes.crystals[i];
-      var gx = cluster.x + cluster.dx * inset * 1.9;
-      var gy = cluster.y + cluster.dy * inset * 1.9;
-
-      ctx.globalAlpha = 1;
-      Art.softEllipse(ctx, gx, gy, inset * 1.5, inset * 1.5,
-        'rgba(150, 205, 245, 0.3)', 'rgba(150, 205, 245, 0)');
-
-      for (var k = 0; k < cluster.shards.length; k++) {
-        var sh = cluster.shards[k];
-        var bx = cluster.x + cluster.dx * sh.along * 0.6;
-        var by = cluster.y + cluster.dy * sh.along;
-
-        ctx.globalAlpha = 0.75;
-        ctx.beginPath();
-        ctx.moveTo(bx, by);
-        ctx.lineTo(
-          bx + cluster.dx * sh.len * (1 + sh.spread * 0.2),
-          by + cluster.dy * sh.len * (0.55 + sh.spread * 0.3)
-        );
-        ctx.lineTo(bx + cluster.dy * sh.w, by - cluster.dx * sh.w);
-        ctx.closePath();
-
-        ctx.fillStyle = shapes.cornerGrads[i];
-        ctx.fill();
-
-        ctx.globalAlpha = 0.4;
-        ctx.strokeStyle = COLORS.iceEdge;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-    }
-
-    ctx.restore();
-  }
-
-  /** 石板外沿的冷光池：让石板看起来在照亮洞穴。 */
-  function drawBoardGlow(ctx, state) {
-    var rect = boardRect(state);
-
-    ctx.save();
-    Art.softEllipse(
-      ctx,
-      rect.x + rect.width / 2,
-      rect.y + rect.height / 2,
-      rect.width * 0.74, rect.height * 0.74,
-      'rgba(120, 196, 244, 0.22)',
-      'rgba(120, 196, 244, 0)'
-    );
-    ctx.restore();
-  }
-
-  /**
-   * 洞穴背景：底色 → 光池 → 岩壁冰柱 → 背景飘雪。在 drawBoard 之前调用。
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {object} state
-   */
-  function drawScene(ctx, state) {
-    if (!geom.size) return;
-
-    caveCtx = ctx;
-
-    ctx.save();
-
-    var grad = ctx.createLinearGradient(0, 0, 0, geom.size);
-    grad.addColorStop(0, COLORS.caveTop);
-    grad.addColorStop(1, COLORS.caveBottom);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, geom.size, geom.size);
-
-    // 洞穴被棋盘照亮：中心一团冷光
-    var rect = boardRect(state);
-    Art.softEllipse(
-      ctx,
-      rect.x + rect.width / 2,
-      rect.y + rect.height / 2,
-      geom.size * 0.8, geom.size * 0.72,
-      COLORS.caveGlow, 'rgba(96, 180, 230, 0)'
-    );
-
-    ctx.restore();
-
-    drawCaveIce(ctx, state);
-    drawBoardGlow(ctx, state);
-    drawSnow(ctx);
   }
 
   // ── 山谷溪流 ────────────────────────────────────────────────────────────
@@ -803,15 +272,14 @@
     ctx.fillStyle = grad;
     ctx.fillRect(bounds.left, rect.y, width, rect.height);
 
-    // 纵向收尾：首尾各淡出一段，与石板面色融合（两端色值取自 render/board.js）
-    var boardTopRgb = G.Render.Board.COLORS.boardTopRgb;
-    var boardBottomRgb = G.Render.Board.COLORS.boardBottomRgb;
+    // 纵向收尾：首尾各淡出一段，与石板面色融合（两端色值取自当前主题的石板配色）
+    var slab = Theme.get(Theme.idOf(state)).slab;
     var fade = Math.min(rect.height * 0.24, geom.margin * 1.2);
     var fadeGrad = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.height);
-    fadeGrad.addColorStop(0, Art.rgba(boardTopRgb, 1));
-    fadeGrad.addColorStop(fade / rect.height, Art.rgba(boardTopRgb, 0));
-    fadeGrad.addColorStop(1 - fade / rect.height, Art.rgba(boardBottomRgb, 0));
-    fadeGrad.addColorStop(1, Art.rgba(boardBottomRgb, 1));
+    fadeGrad.addColorStop(0, Art.rgba(slab.topRgb, 1));
+    fadeGrad.addColorStop(fade / rect.height, Art.rgba(slab.topRgb, 0));
+    fadeGrad.addColorStop(1 - fade / rect.height, Art.rgba(slab.bottomRgb, 0));
+    fadeGrad.addColorStop(1, Art.rgba(slab.bottomRgb, 1));
 
     ctx.fillStyle = fadeGrad;
     ctx.fillRect(bounds.left, rect.y, width, rect.height);
@@ -1347,6 +815,18 @@
 
   // ── 冰锥预警 ────────────────────────────────────────────────────────────
 
+  /** 向下 / 向上的冰锥路径。dir = 1 向下（挂顶），-1 向上（长在底部）。 */
+  function shardPath(ctx, cx, baseY, width, height, lean, dir) {
+    var half = width / 2;
+    var tipY = baseY + height * dir;
+
+    ctx.beginPath();
+    ctx.moveTo(cx - half, baseY);
+    ctx.quadraticCurveTo(cx - half * 0.55, baseY + height * 0.45 * dir, cx + lean, tipY);
+    ctx.quadraticCurveTo(cx + half * 0.55, baseY + height * 0.45 * dir, cx + half, baseY);
+    ctx.closePath();
+  }
+
   /** 预警下的棋子会完全遮住格心，故把冰锥缩小挪到格子右上角。 */
   function drawSpikeOnStone(ctx, state, x, y) {
     var box = cellBox(state, x, y);
@@ -1713,220 +1193,6 @@
     ctx.restore();
   }
 
-  // ── 氛围层（最上层）────────────────────────────────────────────────────
-
-  var frostOverlay = null;
-
-  /** 画布边缘的霜层：只生成一次，之后每帧贴回来。 */
-  function ensureFrostOverlay() {
-    var key = geom.size + '|' + geom.dpr;
-
-    if (frostOverlay && frostOverlay.key === key) return frostOverlay;
-
-    var surface = Art.createSurface(geom.size, geom.size, geom.dpr);
-    frostOverlay = { key: key, surface: surface };
-
-    if (!surface) return frostOverlay;
-
-    var ctx = surface.ctx;
-    var rng = Art.rngFrom(0xF0057);
-    var size = geom.size;
-    var reach = size * 0.16;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-
-    for (var i = 0; i < 130; i++) {
-      // 贴边生成：先在四条边上取点，再往画布内偏一点
-      var side = Math.floor(rng() * 4);
-      var t = rng();
-      var depth = Math.pow(rng(), 1.8) * reach;
-      var x, y, angle;
-
-      if (side === 0) {
-        x = t * size;
-        y = depth;
-        angle = Math.PI / 2 + (rng() - 0.5) * 1.4;
-      } else if (side === 1) {
-        x = size - depth;
-        y = t * size;
-        angle = Math.PI + (rng() - 0.5) * 1.4;
-      } else if (side === 2) {
-        x = t * size;
-        y = size - depth;
-        angle = -Math.PI / 2 + (rng() - 0.5) * 1.4;
-      } else {
-        x = depth;
-        y = t * size;
-        angle = (rng() - 0.5) * 1.4;
-      }
-
-      var fade = 1 - depth / reach;
-      Art.frostSprig(
-        ctx, x, y,
-        (10 + rng() * 26) * (0.5 + fade),
-        angle,
-        (0.04 + rng() * 0.09) * (0.4 + fade),
-        0.7 + rng() * 0.8,
-        rng
-      );
-    }
-
-    // 零星亮点
-    for (var k = 0; k < 90; k++) {
-      var sx = rng() * size;
-      var sy = rng() * size;
-      var edge = Math.min(sx, sy, size - sx, size - sy) / (size * 0.5);
-      var a = (1 - Math.min(1, edge * 2.2)) * 0.5 * rng();
-
-      ctx.globalAlpha = a;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(sx, sy, 0.6 + rng() * 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.restore();
-    return frostOverlay;
-  }
-
-  /** 从左上斜切进来的冷光。 */
-  function drawLightShafts(ctx) {
-    var size = geom.size;
-    var drift = Math.sin(clock / 5200) * size * 0.02;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-
-    var shafts = [
-      { x: size * 0.06, w: size * 0.2, lean: size * 0.36, a: 0.9 },
-      { x: size * 0.32, w: size * 0.11, lean: size * 0.3, a: 0.55 },
-      { x: size * 0.72, w: size * 0.08, lean: size * 0.22, a: 0.35 }
-    ];
-
-    for (var i = 0; i < shafts.length; i++) {
-      var s = shafts[i];
-      var top = -size * 0.05;
-      var bottom = size * 1.05;
-      var grad = ctx.createLinearGradient(
-        s.x + drift, top,
-        s.x + drift + s.lean, bottom
-      );
-      grad.addColorStop(0, 'rgba(150, 210, 255, 0)');
-      grad.addColorStop(0.35, 'rgba(150, 210, 255, ' + (0.075 * s.a).toFixed(3) + ')');
-      grad.addColorStop(0.6, 'rgba(190, 230, 255, ' + (0.05 * s.a).toFixed(3) + ')');
-      grad.addColorStop(1, 'rgba(150, 210, 255, 0)');
-
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(s.x + drift - s.w / 2, top);
-      ctx.lineTo(s.x + drift + s.w / 2, top);
-      ctx.lineTo(s.x + drift + s.lean + s.w, bottom);
-      ctx.lineTo(s.x + drift + s.lean - s.w, bottom);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  /** 前景大雪：贴在所有内容之上，制造纵深。 */
-  function drawFrontSnow(ctx) {
-    if (!frontSnow) initFrontSnow();
-
-    ctx.save();
-
-    for (var i = 0; i < frontSnow.length; i++) {
-      var f = frontSnow[i];
-
-      Art.softEllipse(ctx, f.x, f.y, f.r * 2.4, f.r * 2.4,
-        'rgba(226, 244, 255, ' + (f.alpha * 0.5).toFixed(3) + ')',
-        'rgba(226, 244, 255, 0)');
-
-      ctx.globalAlpha = f.alpha;
-      ctx.fillStyle = 'rgba(240, 250, 255, 0.95)';
-      Art.starPath(ctx, f.x, f.y, f.r * 1.5, f.r * 0.5, 6, f.spin);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  /** 各场地的环境色偏；雷区倒计时紧迫时加一层会呼吸的暖红。 */
-  function drawAmbientTint(ctx, state) {
-    var arena = state ? state.arenaState : null;
-    var tint = null;
-
-    if (arena && arena.mines) {
-      tint = 'rgba(255, 118, 84, 0.05)';
-
-      var mines = Mine.mineList(arena);
-      var urgent = false;
-
-      for (var i = 0; i < mines.length; i++) {
-        if (mines[i].turns <= 3) { urgent = true; break; }
-      }
-
-      if (urgent) {
-        var pulse = 0.5 + 0.5 * Math.sin(clock / 320);
-        tint = 'rgba(255, 96, 64, ' + (0.03 + 0.05 * pulse).toFixed(3) + ')';
-      }
-    } else if (arena && arena.riverColumns) {
-      tint = 'rgba(88, 196, 226, 0.055)';
-    } else if (arena) {
-      tint = 'rgba(120, 200, 255, 0.05)';
-    } else {
-      tint = 'rgba(140, 216, 255, 0.03)';
-    }
-
-    ctx.save();
-    ctx.fillStyle = tint;
-    ctx.fillRect(0, 0, geom.size, geom.size);
-    ctx.restore();
-  }
-
-  /** 暗角：把注意力收回画面中心。 */
-  function drawVignette(ctx) {
-    var size = geom.size;
-
-    ctx.save();
-
-    var grad = ctx.createRadialGradient(
-      size / 2, size / 2, size * 0.34,
-      size / 2, size / 2, size * 0.78
-    );
-    grad.addColorStop(0, 'rgba(2, 6, 12, 0)');
-    grad.addColorStop(0.65, 'rgba(2, 6, 12, 0.22)');
-    grad.addColorStop(1, COLORS.vignette);
-
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
-    ctx.restore();
-  }
-
-  /**
-   * 最上层氛围：斜向冷光 → 边缘霜层 → 前景大雪 → 环境色偏 → 暗角 →（胜利时）聚焦。
-   * 胜利聚焦需要先把整盘压暗再把五连提到最上，所以放在本层最后，并回调
-   * render/board.js 的 drawWinSpotlight。
-   */
-  function drawAtmosphere(ctx, state) {
-    if (!geom.size) return;
-
-    drawLightShafts(ctx);
-
-    var frost = ensureFrostOverlay();
-    if (frost.surface) Art.blitSurface(ctx, frost.surface);
-
-    drawFrontSnow(ctx);
-    drawAmbientTint(ctx, state);
-    drawVignette(ctx);
-
-    if (state && state.winner !== T.WINNER_NONE && G.Render.Board &&
-        G.Render.Board.drawWinSpotlight) {
-      G.Render.Board.drawWinSpotlight(ctx, state);
-    }
-  }
-
   G.Render.Arena = {
     COLORS: COLORS,
     configure: configure,
@@ -1939,9 +1205,7 @@
     notifyBlasts: notifyBlasts,
     drawMinePreview: drawMinePreview,
     resetEffects: resetEffects,
-    drawScene: drawScene,
     drawArena: drawArena,
-    drawArenaOverlay: drawArenaOverlay,
-    drawAtmosphere: drawAtmosphere
+    drawArenaOverlay: drawArenaOverlay
   };
 })();
