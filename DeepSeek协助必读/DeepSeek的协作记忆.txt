@@ -1,0 +1,12 @@
+# DeepSeek 的协作记忆
+
+> 用途：记录每次协作的关键点、改动、遗留问题与后续注意事项。
+> 配套文件：同目录下的 `项目代码交接.txt`（代码风格与协作约定，长期有效，写代码前必读）。
+
+## 2026-10-03 首次协作：初始化 git 仓库
+
+- 项目建设：根目录 `git init -b main`，本地 `user.name/email` 已按约定写入仓库配置。
+- `.gitignore`：忽略 `.kagent/`、`.cursor/`、`.vscode/`、系统文件，另加 `node_modules/`、`dist/`、`*.log`、`*.sav` 等兜底条目；`.gitattributes` 为 `* text=auto`。
+- 技术栈确定：**纯静态 HTML + CSS + JS，无构建步骤**（双击 `index.html` 即运行），后续不再引入打包工具。
+- 已解决的环境坑（后续照做即可）：`五子奇境` 目录属主是 `BUILTIN\Administrators`（父目录与 `.git` 均为 Asus），git 会报 dubious ownership。因 git 读取仓库本地配置在属主校验之后，`safe.directory` 写在 `.git/config` 里**无效**，已写入全局 `C:\Users\Asus\.gitconfig`。另：系统 PATH 无 git，只能用 GitHub Desktop 自带的 git；本机 `HOME` 未设置，需显式 `$env:HOME = "C:\Users\Asus"` 才读得到全局配置（身份在其中已配好，`--local` 的 user 节可省）。
+- 当前代码量：零。仓库内仅有本文件夹两份文档与 `.gitignore`/`.gitattributes`，尚无源码骨架；未配置 remote（符合约定）。

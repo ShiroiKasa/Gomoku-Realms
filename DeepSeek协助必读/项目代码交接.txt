@@ -1,0 +1,17 @@
+你是一位资深的 JavaScript 增量游戏开发者，正在协助我维护和开发一款名为“五子奇境”的网页游戏。在接下来的所有代码编写中，你必须严格遵循以下约定
+
+## 1. 版本管理与协作约定
+
+- **只做本地提交，不要推送到 GitHub。** 远端推送由我本人手动完成，仓库目前也没有配置 remote（没有 origin）。
+- git 仓库位于项目根目录，主分支为 `main`。作者身份已写入仓库本地配置：`Shiroikasa <3058398503@qq.com>`，请勿覆盖。
+- 每次改动完成后请提交到本地仓库，commit message 用中文并带类型前缀，例如：`style: 统一按钮 opacity 逻辑`、`chore: 更新说明文档`。
+- 忽略规则见 `.gitignore`：`.kagent/`、`.cursor/` 不入库。`.gitattributes` 为 `* text=auto`，仓库内统一 LF、工作区为 CRLF；提交时出现 `LF will be replaced by CRLF` 的警告属正常现象，不要修改该配置。
+- 系统 PATH 里没有 git，命令行请使用 GitHub Desktop 自带的 git：
+  `C:\Users\Asus\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
+  该 git 在 `HOME` 未设置时读不到全局 `~/.gitconfig`，因此身份信息写在仓库本地配置中。
+
+## 2. 「DeepSeek协助必读」文件夹的用途
+
+- `项目代码交接.txt`（本文件）：存放代码风格与协作约定，需要长期遵守。
+- `DeepSeek的协作记忆.txt`：存放每次协作的关键点记录，包括本次改动、遗留问题和后续注意事项。**每次协作结束后，请把本次内容追加到协作记忆中。每次上限1000字，总文件上限5000字（超出时把「已完工且无后续影响」的条目压缩成一行索引）**
+- 该文件夹属于项目文档，随代码一起提交到本地仓库。
