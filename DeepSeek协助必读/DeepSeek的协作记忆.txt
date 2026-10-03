@@ -28,3 +28,13 @@
 - 踩到的坑（重要）：`settleTurns` 里冰锥先落下生成冰块（=2），紧接着的融化会把它扣成 1，**导致「持续 2 回合」实际只持续 1 回合**。修法：结算前先记下已存在的冰块 key，融化只结算这批，新冰当回合不扣。连带结论：冰块峰值上限是 `2 × 5 = 10`（两波共存），不是 5。
 - 视觉已做：洞穴岩壁 + 飘雪 + 冰川质感棋盘（`render/board.js` 配色同步）；预警为向下蓝三角（有子时挪到右上角以免被棋子盖住）；冰块为半透明圆角矩形 + 剩余回合小点；冰锥落下有 200ms 闪光与冰块弹入。**雪花/闪光依赖 `rAF` 时间戳驱动 `RenderArena.tick()`**。
 - 校验：Node 临时脚本 2 套共 111 项（跑完即删）。含 20000 次统计验证落下概率 30.00%、3000 回合长跑验证预警恒为 5 且状态自洽、冰块恰好持续 2 回合、成五不进结算、冰块格拒绝落子、500 回合后 `cells` 仍只含 `0|1|2`。**仍未在真实浏览器确认视觉效果**。
+
+## 2026-10-03 第四次协作：开始界面与模式选择
+
+- 新增 `src/core/mode.js`：`Gomoku.Modes` 一张表两个模式（`classic.arena = null`、`snow.arena = 'snow'`）+ `Modes.get(id)` 容错回退。**未做插件系统/注册表/动态加载**。script 顺序在 `rules.js` 后插入 `mode.js`。
+- `index.html` 改为两块 `<div class="screen">`：`#menu` 与 `#game`，用 **HTML `hidden` 属性 + CSS `.screen[hidden]{display:none}`** 切换（未用 JS 改 style，也未做过渡动画）。启动即停在菜单，不再自动开局。
+- `main.js` 顶层加 `appState = { screen:'menu'|'game', mode:'classic'|'snow' }`，配套 `isPlaying()` / `enterMode(id)` / `backToMenu()`；原 `restart()` 更名 `restartGame()`（`G.Main.restart` 仍保留该名以免破坏既有调用）。**模式决定场地**：`mode.arena === 'snow'` 才建 `arenaState`，否则为 `null`。
+- 渲染守卫：`render()`、`scheduleRender()`、`resizeCanvas()`、`ghostFromHover()`、`onKeyDown()` 全部在非 game 屏幕下提前返回。理由：菜单里画布是 `hidden`，`getBoundingClientRect()` 会全 0 导致尺寸/命中算错，且 `rAF` 动画（雪花）不该在菜单里空转。
+- 顺手做的（规格未要求，可改）：经典模式自动隐藏冰锥图例与场地说明文字；`Esc` 键返回菜单、`R` 键重开。
+- 菜单底色按规格用 `#1A1A2E`（叠一层冷光与游戏界面同源）。
+- 校验：Node 临时脚本 2 套共 92 项（80 项菜单/模式 + 12 项前两里程碑回归，跑完即删），覆盖 12 条验收标准：启动停在菜单、两种模式进入后 `arenaState` 分别为 `null`/正常、切模式棋盘干净、重开保留模式、返回菜单清盘、菜单下 `render` 不排队 rAF、两种模式各 300 回合后 `cells` 仍只含 `0|1|2`。**视觉仍待你在真实浏览器确认**。

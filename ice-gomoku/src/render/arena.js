@@ -354,7 +354,9 @@
    * @param {CanvasRenderingContext2D} ctx
    * @param {object} state
    */
+  /** 该格是否有预警（且该格没有棋子时画在格心）。 */
   function drawArena(ctx, state) {
+    // 经典模式没有场地：arenaState 为 null，直接不画任何东西
     if (!state || !state.arenaState) return;
 
     var spikes = Arena.spikeList(state.arenaState);

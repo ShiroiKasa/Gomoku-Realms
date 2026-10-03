@@ -42,6 +42,105 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    /* ── 屏幕切换：只靠 hidden 属性，不做过渡动画 ───────────── */
+    .screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      width: 100%;
+    }
+
+    .screen[hidden] { display: none; }
+
+    /* ── 开始界面 ───────────────────────────────────────── */
+    #menu {
+      justify-content: center;
+      min-height: 78vh;
+      text-align: center;
+      /* 深色底：#1A1A2E，叠一点冷光让它与游戏界面同源 */
+      background:
+        radial-gradient(620px 420px at 50% 8%, rgba(111, 211, 255, 0.10) 0%, transparent 68%),
+        #1A1A2E;
+      border-radius: 18px;
+      padding: 34px 20px;
+    }
+
+    .menu-inner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .menu-title {
+      margin: 0;
+      font-size: 42px;
+      font-weight: 600;
+      letter-spacing: 0.3em;
+      /* 让字距在视觉上也居中：补偿最后一个字的右边距 */
+      text-indent: 0.3em;
+      color: #eaf4ff;
+      text-shadow: 0 0 34px rgba(111, 211, 255, 0.4);
+    }
+
+    .menu-sub {
+      margin: 0 0 18px;
+      font-size: 13px;
+      letter-spacing: 0.26em;
+      color: var(--ink-dim);
+    }
+
+    .menu-modes {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: min(340px, 82vw);
+    }
+
+    .mode-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 5px;
+      padding: 16px 20px;
+      border: 1px solid rgba(111, 211, 255, 0.28);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(111, 211, 255, 0.10), rgba(111, 211, 255, 0.03));
+      color: var(--ink);
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
+    }
+
+    .mode-btn:hover {
+      background: linear-gradient(180deg, rgba(111, 211, 255, 0.22), rgba(111, 211, 255, 0.08));
+      border-color: rgba(111, 211, 255, 0.6);
+      transform: translateY(-1px);
+    }
+
+    .mode-btn:active { transform: translateY(0); }
+    .mode-btn:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+
+    .mode-name {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+    }
+
+    .mode-desc {
+      font-size: 12px;
+      color: var(--ink-dim);
+    }
+
+    .menu-version {
+      margin: 22px 0 0;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      color: rgba(138, 166, 189, 0.7);
+    }
+
     header {
       text-align: center;
     }
@@ -157,6 +256,19 @@
     button:active { transform: translateY(1px); }
     button:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
 
+    /* 次要按钮：返回菜单 */
+    button.btn-ghost {
+      border-color: rgba(158, 216, 255, 0.22);
+      background: transparent;
+      color: var(--ink-dim);
+      letter-spacing: 0.06em;
+    }
+
+    button.btn-ghost:hover {
+      background: rgba(158, 216, 255, 0.1);
+      color: var(--ink);
+    }
+
     footer {
       max-width: 660px;
       text-align: center;
@@ -203,61 +315,92 @@
   </style>
 </head>
 <body>
-  <header>
-    <h1>五子奇境<span class="sub">雪山洞穴 · 冰锥与冰块</span></h1>
-  </header>
+  <!-- ══ 开始界面 ══════════════════════════════════════════ -->
+  <div id="menu" class="screen">
+    <div class="menu-inner">
+      <h1 class="menu-title">五子奇境</h1>
+      <p class="menu-sub">五子棋 × 场地事件</p>
 
-  <main>
-    <section class="hud">
-      <div class="hud-item">
-        <span class="turn-dot" data-role="turn-dot"></span>
-        <span class="hud-label">当前</span>
-        <span class="hud-value" data-role="turn">黑棋</span>
-      </div>
-      <div class="hud-item">
-        <span class="hud-label">手数</span>
-        <span class="hud-value" data-role="moves">0</span>
-      </div>
-      <div class="hud-item">
-        <span class="hud-label">比分</span>
-        <span class="hud-value" data-role="score">0 : 0</span>
-      </div>
-      <div class="hud-item">
-        <span class="hud-label">场地</span>
-        <span class="hud-value" data-role="arena">—</span>
-      </div>
-    </section>
+      <div class="menu-modes">
+        <button type="button" class="mode-btn" data-role="btn-mode-classic">
+          <span class="mode-name">经典五子棋</span>
+          <span class="mode-desc">纯五子棋，无障碍对决</span>
+        </button>
 
-    <div class="board-wrap">
-      <canvas id="board"></canvas>
+        <button type="button" class="mode-btn" data-role="btn-mode-snow">
+          <span class="mode-name">雪山洞穴</span>
+          <span class="mode-desc">冰锥预警与冰块，落子需权衡</span>
+        </button>
+      </div>
+
+      <p class="menu-version">v0.3 · 本地原型 · 无外部依赖</p>
     </div>
+  </div>
 
-    <section class="controls">
-      <button type="button" data-role="btn-restart">重开</button>
-    </section>
+  <!-- ══ 游戏界面 ══════════════════════════════════════════ -->
+  <div id="game" class="screen" hidden>
+    <header>
+      <h1>五子奇境<span class="sub">五子棋 × 场地事件</span></h1>
+    </header>
 
-    <section class="legend">
-      <span class="legend-item">
-        <span class="legend-icon" data-icon="spike"></span>冰锥预警（落下时砸毁该格棋子）
-      </span>
-      <span class="legend-item">
-        <span class="legend-icon" data-icon="ice"></span>冰块（不可落子，2 回合后融化）
-      </span>
-    </section>
+    <main>
+      <section class="hud">
+        <div class="hud-item">
+          <span class="hud-label">模式</span>
+          <span class="hud-value" data-role="mode">经典五子棋</span>
+        </div>
+        <div class="hud-item">
+          <span class="turn-dot" data-role="turn-dot"></span>
+          <span class="hud-label">当前</span>
+          <span class="hud-value" data-role="turn">黑棋</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">手数</span>
+          <span class="hud-value" data-role="moves">0</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">比分</span>
+          <span class="hud-value" data-role="score">0 : 0</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">场地</span>
+          <span class="hud-value" data-role="arena">—</span>
+        </div>
+      </section>
 
-    <footer>
-      黑先手，横、竖、斜任意方向连成五子即胜。<br>
-      冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
-      砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
-      冰块格不可落子；预警格可以落子，但要承担被砸的风险。
-    </footer>
-  </main>
+      <div class="board-wrap">
+        <canvas id="board"></canvas>
+      </div>
+
+      <section class="controls">
+        <button type="button" data-role="btn-restart">重开</button>
+        <button type="button" class="btn-ghost" data-role="btn-back">返回菜单</button>
+      </section>
+
+      <section class="legend" data-role="legend">
+        <span class="legend-item">
+          <span class="legend-icon" data-icon="spike"></span>冰锥预警（落下时砸毁该格棋子）
+        </span>
+        <span class="legend-item">
+          <span class="legend-icon" data-icon="ice"></span>冰块（不可落子，2 回合后融化）
+        </span>
+      </section>
+
+      <footer data-role="footer">
+        黑先手，横、竖、斜任意方向连成五子即胜。<br>
+        冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
+        砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
+        冰块格不可落子；预警格可以落子，但要承担被砸的风险。
+      </footer>
+    </main>
+  </div>
 
   <!-- 普通 script 标签按依赖顺序加载（不使用 ES Module） -->
   <script src="src/core/types.js"></script>
   <script src="src/core/board.js"></script>
   <script src="src/core/arena.js"></script>
   <script src="src/core/rules.js"></script>
+  <script src="src/core/mode.js"></script>
   <script src="src/render/board.js"></script>
   <script src="src/render/arena.js"></script>
   <script src="src/main.js"></script>

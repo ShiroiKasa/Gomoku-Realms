@@ -1,8 +1,12 @@
 /**
  * 五子奇境 · 入口
  *
- * 职责：持有游戏状态、绑定事件、按固定顺序驱动渲染。
+ * 职责：持有应用状态与游戏状态、绑定事件、按固定顺序驱动渲染。
  * 刻意保持「顺序调用」的直白写法——不使用回调、事件总线或观察者模式。
+ *
+ * 顶层状态只有两个屏幕、两个模式：
+ *   appState = { screen: 'menu' | 'game', mode: 'classic' | 'snow' }
+ * 模式决定是否启用场地（见 core/mode.js）。
  *
  * 落子流程（固定顺序）：
  *   检查合法性 → 落子 → 判五连 → 若胜则结束 → advanceTurn → render
@@ -17,6 +21,7 @@
   var B = G.Board;
   var Rules = G.Rules;
   var Arena = G.Arena;
+  var Modes = G.Modes;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
 
@@ -38,6 +43,17 @@
   var score = { black: 0, white: 0 };
   var winNoticeTimer = null;
 
+  // ── 顶层状态：只有两个屏幕、两个模式 ────────────────────────────────────
+  var appState = {
+    screen: 'menu',            // 'menu' | 'game'
+    mode: Modes.DEFAULT        // 'classic' | 'snow'（进入 game 后有效）
+  };
+
+  /** 是否处于对局中（菜单界面下不跑游戏逻辑、不渲染棋盘）。 */
+  function isPlaying() {
+    return appState.screen === 'game';
+  }
+
   // ── DOM 引用 ────────────────────────────────────────────────────────────
 
   function $(role) {
@@ -54,6 +70,9 @@
   }
 
   function resizeCanvas() {
+    // 菜单界面下画布不可见，尺寸无意义，跳过
+    if (!isPlaying()) return;
+
     boardPx = computeBoardSize();
 
     var dpr = window.devicePixelRatio || 1;
@@ -75,11 +94,15 @@
   // ── 渲染主循环 ──────────────────────────────────────────────────────────
 
   function scheduleRender() {
+    if (!isPlaying()) return;
     if (renderQueued) return;
     renderQueued = true;
 
     window.requestAnimationFrame(function (now) {
       renderQueued = false;
+
+      // 已经退回菜单就不再继续画（雪花动画也随之停下）
+      if (!isPlaying()) return;
 
       // 推进场地动画时钟（雪花飘落、冰锥闪光、冰块弹入）
       RenderArena.tick(typeof now === 'number' ? now : 0);
@@ -95,6 +118,9 @@
    * 冰块必须画在棋子之后，否则压不住棋子。
    */
   function render() {
+    // 菜单界面下画布不可见，也不该继续绘制
+    if (!isPlaying()) return;
+
     ctx.clearRect(0, 0, boardPx, boardPx);
 
     var ghost = ghostFromHover();
@@ -110,7 +136,8 @@
 
   /** 把鼠标位置转成落子预览；不适格则返回 null。 */
   function ghostFromHover() {
-    if (!hover || state.winner !== T.WINNER_NONE) return null;
+    if (!isPlaying() || !hover) return null;
+    if (state.winner !== T.WINNER_NONE) return null;
     if (!B.isLegal(state, state.arenaState, hover.x, hover.y)) return null;
 
     return { x: hover.x, y: hover.y, player: state.currentPlayer };
@@ -118,6 +145,9 @@
 
   function updateHud() {
     var over = state.winner !== T.WINNER_NONE;
+    var mode = Modes.get(appState.mode);
+
+    elements.mode.textContent = mode.name;
 
     elements.turn.textContent = over
       ? T.nameOf(state.winner) + '胜'
@@ -132,11 +162,19 @@
     elements.moves.textContent = String(B.countStones(state));
     elements.score.textContent = score.black + ' : ' + score.white;
 
-    // 场地信息：雪山洞穴
-    elements.arena.textContent = state.arenaState
-      ? '预警 ' + Arena.countSpikes(state.arenaState) +
-        ' · 冰块 ' + Arena.countIceBlocks(state.arenaState)
-      : '—';
+    // 场地信息：只有启用了场地的模式（雪山洞穴）才有内容
+    if (state.arenaState) {
+      elements.arena.textContent =
+        '预警 ' + Arena.countSpikes(state.arenaState) +
+        ' · 冰块 ' + Arena.countIceBlocks(state.arenaState);
+    } else {
+      elements.arena.textContent = '—';
+    }
+
+    // 经典模式没有冰锥/冰块，图例与说明随之隐藏
+    var showArenaLegend = !!mode.arena;
+    elements.legend.hidden = !showArenaLegend;
+    elements.footer.hidden = !showArenaLegend;
 
     canvas.classList.toggle('is-over', over);
   }
@@ -219,26 +257,70 @@
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = window.setTimeout(function () {
       window.alert(text);
-      restart();
+      restartGame();
     }, 220);
   }
 
   // ── 开局与重开 ──────────────────────────────────────────────────────────
 
-  function restart() {
+  /**
+   * 重开当前模式的一局。保留 appState.mode 与比分。
+   *
+   * 场地是否启用完全由模式的 arena 字段决定：
+   *   classic → arena: null    → arenaState = null，纯五子棋
+   *   snow    → arena: 'snow'  → 建立 arenaState 并补满 5 个冰锥预警
+   */
+  function restartGame() {
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = null;
+
+    var mode = Modes.get(appState.mode);
 
     hover = null;
     state = T.createGameState(T.DEFAULT_SIZE);
 
-    // 初始化场地：创建 arenaState 并补满初始的 5 个冰锥预警
-    state.arenaState = Arena.create(state);
+    if (mode.arena === 'snow') {
+      state.arenaState = Arena.create(state);
+    } else {
+      state.arenaState = null;   // 经典模式没有场地
+    }
 
     // 清掉上一局残留的动画痕迹（闪光、雪花位置）
     RenderArena.resetEffects();
 
     render();
+  }
+
+  // ── 屏幕切换（只有 menu 与 game 两个屏幕）───────────────────────────────
+
+  /** 进入某个模式并开新局。 */
+  function enterMode(modeId) {
+    appState.mode = Modes.get(modeId).id;
+    appState.screen = 'game';
+
+    elements.menu.hidden = true;
+    elements.game.hidden = false;
+
+    resizeCanvas();     // 画布此时才可见，尺寸在这里确定
+    restartGame();
+  }
+
+  /** 返回菜单：清空棋盘、停止对局。 */
+  function backToMenu() {
+    window.clearTimeout(winNoticeTimer);
+    winNoticeTimer = null;
+
+    appState.screen = 'menu';
+
+    // 清空棋盘并停掉游戏状态
+    hover = null;
+    state = T.createGameState(T.DEFAULT_SIZE);
+    state.arenaState = null;
+
+    ctx.clearRect(0, 0, boardPx, boardPx);
+
+    elements.game.hidden = true;
+    elements.menu.hidden = false;
   }
 
   // ── 事件绑定 ────────────────────────────────────────────────────────────
@@ -297,7 +379,9 @@
   }
 
   function onKeyDown(event) {
-    if (event.key === 'r' || event.key === 'R') restart();
+    if (!isPlaying()) return;
+    if (event.key === 'r' || event.key === 'R') restartGame();
+    if (event.key === 'Escape') backToMenu();
   }
 
   function bindControls() {
@@ -305,7 +389,12 @@
     canvas.addEventListener('pointerleave', onPointerLeave);
     canvas.addEventListener('pointerdown', onPointerDown);
 
-    elements.restartBtn.addEventListener('click', restart);
+    elements.restartBtn.addEventListener('click', restartGame);
+    elements.backBtn.addEventListener('click', backToMenu);
+
+    elements.modeClassicBtn.addEventListener('click', function () { enterMode('classic'); });
+    elements.modeSnowBtn.addEventListener('click', function () { enterMode('snow'); });
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', resizeCanvas);
   }
@@ -316,27 +405,46 @@
     canvas = document.getElementById('board');
     ctx = canvas.getContext('2d');
 
+    elements.menu = document.getElementById('menu');
+    elements.game = document.getElementById('game');
+
+    elements.mode = $('mode');
     elements.turn = $('turn');
     elements.turnDot = $('turn-dot');
     elements.moves = $('moves');
     elements.score = $('score');
     elements.arena = $('arena');
+    elements.legend = $('legend');
+    elements.footer = $('footer');
+
     elements.restartBtn = $('btn-restart');
+    elements.backBtn = $('btn-back');
+    elements.modeClassicBtn = $('btn-mode-classic');
+    elements.modeSnowBtn = $('btn-mode-snow');
 
-    resizeCanvas();
+    // 启动时停在开始界面：先看到菜单，不自动开局
+    state = T.createGameState(T.DEFAULT_SIZE);
+    appState.screen = 'menu';
+
+    elements.menu.hidden = false;
+    elements.game.hidden = true;
+
     bindControls();
-
-    // 由 restart 统一负责建立 state（含场地初始化）并首次渲染
-    restart();
   }
 
   G.Main = {
     init: init,
+
+    // 供菜单按钮与调试使用
+    getAppState: function () { return appState; },
+    enterMode: enterMode,
+    backToMenu: backToMenu,
+
     // 暴露给调试与后续场地开发使用
     getState: function () { return state; },
     playMove: playMove,
     advanceTurn: advanceTurn,
-    restart: restart,
+    restart: restartGame,
     render: render
   };
 
