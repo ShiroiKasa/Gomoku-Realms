@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>五子奇境 · 五子棋原型</title>
+  <title>五子奇境 · 雪山洞穴</title>
   <style>
     :root {
-      --bg: #121d2a;
-      --bg-2: #0b131d;
-      --panel: rgba(255, 255, 255, 0.05);
-      --panel-line: rgba(158, 216, 255, 0.18);
+      --bg: #0e1c2b;
+      --bg-2: #050b14;
+      --panel: rgba(180, 225, 255, 0.06);
+      --panel-line: rgba(158, 216, 255, 0.22);
       --ink: #dcecf8;
       --ink-dim: #8aa6bd;
       --ice: #6fd3ff;
+      --spike: #4A90D9;
       --black-stone: #101a24;
       --white-stone: #f2f7fb;
     }
@@ -31,7 +32,11 @@
       align-items: center;
       gap: 18px;
       padding: 28px 16px 40px;
-      background: radial-gradient(1100px 620px at 50% -12%, #1d3549 0%, var(--bg) 42%, var(--bg-2) 100%);
+      background:
+        radial-gradient(900px 520px at 50% -18%, #24435e 0%, transparent 62%),
+        radial-gradient(700px 420px at 12% 108%, #16324a 0%, transparent 60%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      background-attachment: fixed;
       color: var(--ink);
       font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -159,11 +164,47 @@
       line-height: 1.9;
       color: var(--ink-dim);
     }
+
+    /* ── 图例 ───────────────────────────────────────────── */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 18px;
+      font-size: 12px;
+      color: var(--ink-dim);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .legend-icon {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+    }
+
+    /* 与画布上的冰锥一致：向下指的蓝色三角 */
+    .legend-icon[data-icon="spike"] {
+      background: var(--spike);
+      opacity: 0.85;
+      clip-path: polygon(0 0, 100% 0, 50% 100%);
+    }
+
+    /* 与画布上的冰块一致：半透明浅蓝圆角方块 */
+    .legend-icon[data-icon="ice"] {
+      border-radius: 3px;
+      background: rgba(150, 210, 255, 0.55);
+      border: 1px solid #8CC8E8;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>五子奇境<span class="sub">五子棋原型 · 场地机制预留</span></h1>
+    <h1>五子奇境<span class="sub">雪山洞穴 · 冰锥与冰块</span></h1>
   </header>
 
   <main>
@@ -195,15 +236,27 @@
       <button type="button" data-role="btn-restart">重开</button>
     </section>
 
+    <section class="legend">
+      <span class="legend-item">
+        <span class="legend-icon" data-icon="spike"></span>冰锥预警（落下时砸毁该格棋子）
+      </span>
+      <span class="legend-item">
+        <span class="legend-icon" data-icon="ice"></span>冰块（不可落子，2 回合后融化）
+      </span>
+    </section>
+
     <footer>
       黑先手，横、竖、斜任意方向连成五子即胜。<br>
-      冰锥、溪流、雷区等场地规则将在后续阶段接入，本阶段仅保留挂载点。
+      冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
+      砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
+      冰块格不可落子；预警格可以落子，但要承担被砸的风险。
     </footer>
   </main>
 
   <!-- 普通 script 标签按依赖顺序加载（不使用 ES Module） -->
   <script src="src/core/types.js"></script>
   <script src="src/core/board.js"></script>
+  <script src="src/core/arena.js"></script>
   <script src="src/core/rules.js"></script>
   <script src="src/render/board.js"></script>
   <script src="src/render/arena.js"></script>

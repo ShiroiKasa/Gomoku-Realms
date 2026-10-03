@@ -71,12 +71,40 @@
     },
 
     /**
+     * 「雪山洞穴」场地常量。
+     *
+     * 场地状态一律存放在 GameState.arenaState 里，绝不混入棋盘 cells：
+     *   arenaState = {
+     *     spikes:    { "x,y": true },  // 冰锥预警：位置可见，落下时间不可知
+     *     iceBlocks: { "x,y": 2 },     // 冰块：值为「还能再结算几次回合后融化」
+     *     rng:       function           // 随机数源（便于测试时注入）
+     *   }
+     */
+    ARENA: {
+      ID: 'snow-cave',
+      NAME: '雪山洞穴',
+
+      MAX_SPIKES: 5,        // 同时存在的预警数量上限（也是补充目标）
+      SPIKE_DROP_CHANCE: 0.3, // 每个预警每回合独立判定的落下概率
+      ICE_TURNS: 2          // 冰块存在多少个回合结算
+    },
+
+    /**
+     * 场地格子的键，例如 (3, 7) → "3,7"。
+     * @param {number} x
+     * @param {number} y
+     * @returns {string}
+     */
+    cellKey: function (x, y) {
+      return x + ',' + y;
+    },
+
+    /**
      * 创建一个新对局的初始状态。
      *
      * 约定：
      *  - cells   ：纯棋盘数据，只含 0 | 1 | 2
-     *  - arenaState：场地状态单独存放。本阶段恒为 null，
-     *                后续接入冰锥 / 溪流 / 雷区时在此挂载，绝不混入 cells。
+     *  - arenaState：场地状态单独存放，与棋盘完全分离
      *  - winner  ：WINNER_NONE(0) 表示未结束
      *  - winningLine：胜出时的五连坐标，未结束时为 null
      *
@@ -101,7 +129,7 @@
         lastMove: null,   // { x, y, player }
         history: [],      // 落子历史，重开时清空
 
-        // 场地状态挂载点（本阶段不使用）
+        // 场地状态：由 core/arena.js 创建与结算，本文件只声明结构
         arenaState: null
       };
     }

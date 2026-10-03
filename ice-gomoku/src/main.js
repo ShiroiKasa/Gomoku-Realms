@@ -6,6 +6,8 @@
  *
  * 落子流程（固定顺序）：
  *   检查合法性 → 落子 → 判五连 → 若胜则结束 → advanceTurn → render
+ *
+ * 场地「雪山洞穴」的事件挂在 advanceTurn 里，见该函数注释。
  */
 (function () {
   'use strict';
@@ -14,6 +16,7 @@
   var T = G.Types;
   var B = G.Board;
   var Rules = G.Rules;
+  var Arena = G.Arena;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
 
@@ -75,24 +78,32 @@
     if (renderQueued) return;
     renderQueued = true;
 
-    window.requestAnimationFrame(function () {
+    window.requestAnimationFrame(function (now) {
       renderQueued = false;
+
+      // 推进场地动画时钟（雪花飘落、冰锥闪光、冰块弹入）
+      RenderArena.tick(typeof now === 'number' ? now : 0);
+
       render();
     });
   }
 
   /**
-   * 渲染分三层，顺序固定：
-   *   drawBoard → drawArena → drawPieces
+   * 渲染分多层，顺序固定：
+   *   drawScene（洞穴背景）→ drawBoard → drawArena（冰锥）→ drawPieces → drawArenaOverlay（冰块）
+   *
+   * 冰块必须画在棋子之后，否则压不住棋子。
    */
   function render() {
     ctx.clearRect(0, 0, boardPx, boardPx);
 
     var ghost = ghostFromHover();
 
-    RenderBoard.drawBoard(ctx, state);        // 第一层：格子线
-    RenderArena.drawArena(ctx, state, ghost); // 第二层：场地覆盖物
+    RenderArena.drawScene(ctx, state);         // 洞穴背景（棋盘之下）
+    RenderBoard.drawBoard(ctx, state);         // 第一层：格子线
+    RenderArena.drawArena(ctx, state, ghost);  // 第二层：冰锥预警（棋子之下）
     RenderBoard.drawPieces(ctx, state, ghost); // 第三层：棋子
+    RenderArena.drawArenaOverlay(ctx, state);  // 冰块（棋子之上）
 
     updateHud();
   }
@@ -100,7 +111,7 @@
   /** 把鼠标位置转成落子预览；不适格则返回 null。 */
   function ghostFromHover() {
     if (!hover || state.winner !== T.WINNER_NONE) return null;
-    if (!B.isEmpty(state, hover.x, hover.y)) return null;
+    if (!B.isLegal(state, state.arenaState, hover.x, hover.y)) return null;
 
     return { x: hover.x, y: hover.y, player: state.currentPlayer };
   }
@@ -121,8 +132,11 @@
     elements.moves.textContent = String(B.countStones(state));
     elements.score.textContent = score.black + ' : ' + score.white;
 
-    // 场地信息：本阶段 arenaState 恒为 null
-    elements.arena.textContent = state.arenaState ? '已加载' : '—';
+    // 场地信息：雪山洞穴
+    elements.arena.textContent = state.arenaState
+      ? '预警 ' + Arena.countSpikes(state.arenaState) +
+        ' · 冰块 ' + Arena.countIceBlocks(state.arenaState)
+      : '—';
 
     canvas.classList.toggle('is-over', over);
   }
@@ -130,20 +144,34 @@
   // ── 回合推进（独立函数，场地事件的挂载点）──────────────────────────────
 
   /**
-   * 推进一个回合。所有「每回合发生一次的场地事件」都应写在这里：
-   *   - 冰锥掉落
-   *   - 水位上涨
-   *   - 雷区倒计时递减
+   * 推进一个回合。所有「每回合发生一次的场地事件」都写在这里。
    *
-   * 注意：这里只推进状态，不做判胜、不做渲染。
+   * 「雪山洞穴」结算顺序（严格按此顺序）：
+   *   1. 结算冰锥落下（遍历所有预警，各 30% 判定）
+   *   2. 结算冰块融化（倒计时 -1，归零则移除）
+   *   3. 补充预警至 5 个
+   *   4. moveCount++
+   *   5. 切换玩家
+   *
+   * 四步与五步之后，玩家看到的就是结算后的棋盘。
+   * 注意这里只推进状态，不做判胜、不做渲染。
    *
    * @param {object} state GameState
    */
   function advanceTurn(state) {
-    state.moveCount++;
-    state.currentPlayer = state.currentPlayer === T.BLACK ? T.WHITE : T.BLACK;
+    // 1~3. 场地结算（冰锥落下 → 冰块融化 → 补充预警）
+    if (state.arenaState) {
+      var settled = Arena.settleTurns(state, state.arenaState);
 
-    // 以后场地事件（冰锥掉落、水位上涨、雷区倒计时）挂在这里
+      // 通知渲染层做落下闪光，纯视觉，不影响规则
+      RenderArena.notifyDrops(settled.drops);
+    }
+
+    // 4. 推进手数
+    state.moveCount++;
+
+    // 5. 切换玩家
+    state.currentPlayer = state.currentPlayer === T.BLACK ? T.WHITE : T.BLACK;
   }
 
   // ── 落子流程 ────────────────────────────────────────────────────────────
@@ -153,9 +181,9 @@
    *   检查合法性 → 落子 → 判五连 → 若胜则结束 → advanceTurn → render
    */
   function playMove(x, y) {
-    // 1. 检查合法性
+    // 1. 检查合法性（含场地规则：冰块格不可落子；预警格可以落子）
     if (state.winner !== T.WINNER_NONE) return;
-    if (!B.isEmpty(state, x, y)) return;
+    if (!B.isLegal(state, state.arenaState, x, y)) return;
 
     var player = state.currentPlayer;
 
@@ -203,6 +231,12 @@
 
     hover = null;
     state = T.createGameState(T.DEFAULT_SIZE);
+
+    // 初始化场地：创建 arenaState 并补满初始的 5 个冰锥预警
+    state.arenaState = Arena.create(state);
+
+    // 清掉上一局残留的动画痕迹（闪光、雪花位置）
+    RenderArena.resetEffects();
 
     render();
   }
@@ -289,11 +323,11 @@
     elements.arena = $('arena');
     elements.restartBtn = $('btn-restart');
 
-    state = T.createGameState(T.DEFAULT_SIZE);
-
     resizeCanvas();
     bindControls();
-    render();
+
+    // 由 restart 统一负责建立 state（含场地初始化）并首次渲染
+    restart();
   }
 
   G.Main = {

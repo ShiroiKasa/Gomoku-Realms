@@ -24,13 +24,13 @@
     cell: 0         // 相邻两条线的间距
   };
 
-  // 冰原色系
+  // 冰川色系（与雪山洞穴场地一致）
   var COLORS = {
-    boardTop: '#eaf4fb',
-    boardBottom: '#c9dfef',
-    gridLine: 'rgba(38, 76, 105, 0.55)',
-    gridEdge: 'rgba(30, 62, 88, 0.7)',
-    starPoint: 'rgba(38, 76, 105, 0.72)',
+    boardTop: '#eef7fd',
+    boardBottom: '#bcd8ec',
+    gridLine: 'rgba(34, 74, 106, 0.55)',
+    gridEdge: 'rgba(28, 60, 88, 0.72)',
+    starPoint: 'rgba(34, 74, 106, 0.72)',
     blackFill: '#101a24',
     blackHighlight: 'rgba(255, 255, 255, 0.34)',
     blackEdge: 'rgba(0, 0, 0, 0.85)',

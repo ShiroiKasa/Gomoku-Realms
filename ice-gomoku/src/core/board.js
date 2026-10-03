@@ -54,7 +54,50 @@
   }
 
   /**
-   * 落子。会自行校验，非法则原样返回 false、不做任何修改。
+   * 该格是否被冰块占据。
+   *
+   * 注意：冰块属于场地状态，存在 arenaState 里，棋盘数据完全不知道它的存在。
+   * 这里只是提供一个便捷查询，不改变 board 的数据结构。
+   */
+  function hasIceBlock(board, arenaState, x, y) {
+    if (!arenaState || !arenaState.iceBlocks) return false;
+    if (!isInside(board, x, y)) return false;
+
+    return Object.prototype.hasOwnProperty.call(arenaState.iceBlocks, T.cellKey(x, y));
+  }
+
+  /** 该格是否有冰锥预警。预警不阻止落子，仅用于渲染与结算。 */
+  function hasSpike(board, arenaState, x, y) {
+    if (!arenaState || !arenaState.spikes) return false;
+    if (!isInside(board, x, y)) return false;
+
+    return Object.prototype.hasOwnProperty.call(arenaState.spikes, T.cellKey(x, y));
+  }
+
+  /**
+   * 该格是否可以落子。场地规则叠加在棋盘规则之上：
+   *   在界内 + 空置 + 无冰块 = 合法
+   *
+   * 冰锥预警**不**影响合法性——「要不要在有预警的格子上落子」正是本场地的博弈核心。
+   *
+   * @param {object} board
+   * @param {object|null} arenaState
+   * @param {number} x
+   * @param {number} y
+   * @returns {boolean}
+   */
+  function isLegal(board, arenaState, x, y) {
+    if (!isEmpty(board, x, y)) return false;
+    if (hasIceBlock(board, arenaState, x, y)) return false;
+    return true;
+  }
+
+  /**
+   * 落子。会自行校验棋盘层面的合法性（在界内、空置），非法则原样返回 false、不做任何修改。
+   *
+   * 注意：这里**不**检查冰块。冰块属于场地规则，由 core/arena.js 与 Board.isLegal 负责；
+   * 本函数刻意只做棋盘层面的事，避免把场地概念混进棋盘数据。
+   *
    * @param {object} board
    * @param {number} x
    * @param {number} y
@@ -127,6 +170,11 @@
     clear: clear,
     countStones: countStones,
     isFull: isFull,
-    starPoints: starPoints
+    starPoints: starPoints,
+
+    // 场地规则相关的查询（读 arenaState，不修改 board 数据）
+    hasIceBlock: hasIceBlock,
+    hasSpike: hasSpike,
+    isLegal: isLegal
   };
 })();
