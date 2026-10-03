@@ -146,11 +146,7 @@
       if (rng() >= A.SPIKE_DROP_CHANCE) continue;  // 没落下，预警保留
 
       // 落下：摧毁该格棋子
-      var hadStone = false;
-      if (B.getCell(board, x, y) !== T.EMPTY) {
-        B.setCell(board, x, y, T.EMPTY);
-        hadStone = true;
-      }
+      var hadStone = B.removeStone(board, x, y);
 
       // 生成冰块并移除预警
       arenaState.iceBlocks[key] = A.ICE_TURNS;

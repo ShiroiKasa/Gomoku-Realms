@@ -4,8 +4,9 @@
  * 就这么一张表，两个模式。刻意不做插件系统、不做注册表、不做动态加载——
  * 场地机制只有「无」和「雪山洞穴」两种，直接查表即可。
  *
- *   arena: null   → 该模式没有场地机制（arenaState 保持 null）
- *   arena: 'snow' → 启用雪山洞穴（冰锥预警 + 冰块）
+ *   arena: null    → 该模式没有场地机制（arenaState 保持 null）
+ *   arena: 'snow'  → 启用雪山洞穴（冰锥预警 + 冰块）
+ *   arena: 'river' → 启用山谷溪流（水位上涨 + 河流扩展 + 冲走棋子）
  */
 (function () {
   'use strict';
@@ -23,6 +24,12 @@
       id: 'snow',
       name: '雪山洞穴',
       arena: 'snow'      // 启用冰锥机制
+    },
+
+    river: {
+      id: 'river',
+      name: '山谷溪流',
+      arena: 'river'     // 启用河流机制
     },
 
     DEFAULT: 'classic',

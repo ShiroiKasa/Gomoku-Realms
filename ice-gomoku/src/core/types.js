@@ -99,6 +99,57 @@
       return x + ',' + y;
     },
 
+    // ── 「山谷溪流」常量 ────────────────────────────────────────────────
+    // 河流为纵向列区域，以棋盘中心 6.5 列为轴左右对称。
+    //
+    // arenaState（river 模式）：
+    //   { waterLevel: 0..80, riverColumns: [6,7], rng: function }
+    RIVER_CENTER: 6.5,
+
+    RIVER_BASE_COLUMNS: [6, 7],        // 初始河宽 2 列
+
+    // 水位跨过 30% / 60% 时向两岸各扩 1 列（永久，不缩回）
+    RIVER_EXPANSIONS: [
+      { level: 30, columns: [5, 8] },
+      { level: 60, columns: [4, 9] }
+    ],
+
+    // 位置系数：越靠河心越容易被冲走
+    RIVER_POSITION_FACTOR: {
+      6: 1.0, 7: 1.0,
+      5: 0.7, 8: 0.7,
+      4: 0.4, 9: 0.4
+    },
+
+    RIVER_MAX_WATER: 80,       // 水位上限（%）
+    RIVER_RISE_PER_TURN: 2,    // 下雨后每回合 +2%
+    RIVER_RAIN_START: 8,       // moveCount 达到 8 时开始下雨
+
+    /**
+     * 水位公式：waterLevel = min(80, max(0, (moveCount - 7) * 2))
+     *
+     * 关键节点：moveCount 7 → 0；8 → 2；22 → 30；37 → 60；47 → 80（封顶）。
+     *
+     * @param {number} moveCount
+     * @returns {number} 0..80 的整数
+     */
+    waterLevelAt: function (moveCount) {
+      var level = (moveCount - (Types.RIVER_RAIN_START - 1)) * Types.RIVER_RISE_PER_TURN;
+      if (level < 0) level = 0;
+      if (level > Types.RIVER_MAX_WATER) level = Types.RIVER_MAX_WATER;
+      return level;
+    },
+
+    /**
+     * 某列的水位位置系数。不在河中返回 0。
+     * @param {number} column
+     * @returns {number}
+     */
+    riverFactorOf: function (column) {
+      var factor = Types.RIVER_POSITION_FACTOR[column];
+      return factor === undefined ? 0 : factor;
+    },
+
     /**
      * 创建一个新对局的初始状态。
      *

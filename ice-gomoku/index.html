@@ -312,6 +312,29 @@
       background: rgba(150, 210, 255, 0.55);
       border: 1px solid #8CC8E8;
     }
+
+    /* 河流：偏深的蓝 */
+    .legend-icon[data-icon="water"] {
+      border-radius: 3px;
+      background: rgba(72, 148, 212, 0.5);
+      border: 1px solid #7ec8f0;
+    }
+
+    /* 河心：最危险，用警示橙 */
+    .legend-icon[data-icon="heart"] {
+      border-radius: 3px;
+      background: rgba(240, 162, 74, 0.55);
+      border: 1px solid #f0a24a;
+    }
+
+    /* 说明文字按模式切换：两个 span 叠放，只显示其中一个 */
+    footer span[data-role^="footer-"] {
+      display: block;
+    }
+
+    footer span[data-role^="footer-"][hidden] {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -331,9 +354,14 @@
           <span class="mode-name">雪山洞穴</span>
           <span class="mode-desc">冰锥预警与冰块，落子需权衡</span>
         </button>
+
+        <button type="button" class="mode-btn" data-role="btn-mode-river">
+          <span class="mode-name">山谷溪流</span>
+          <span class="mode-desc">水位上涨，河中棋子会被冲走</span>
+        </button>
       </div>
 
-      <p class="menu-version">v0.3 · 本地原型 · 无外部依赖</p>
+      <p class="menu-version">v0.4 · 本地原型 · 无外部依赖</p>
     </div>
   </div>
 
@@ -377,20 +405,34 @@
         <button type="button" class="btn-ghost" data-role="btn-back">返回菜单</button>
       </section>
 
-      <section class="legend" data-role="legend">
-        <span class="legend-item">
+      <section class="legend" data-role="legend" hidden>
+        <span class="legend-item" data-role="legend-snow">
           <span class="legend-icon" data-icon="spike"></span>冰锥预警（落下时砸毁该格棋子）
         </span>
-        <span class="legend-item">
+        <span class="legend-item" data-role="legend-snow">
           <span class="legend-icon" data-icon="ice"></span>冰块（不可落子，2 回合后融化）
+        </span>
+        <span class="legend-item" data-role="legend-river">
+          <span class="legend-icon" data-icon="water"></span>河流（可落子，但棋子可能被冲走）
+        </span>
+        <span class="legend-item" data-role="legend-river">
+          <span class="legend-icon" data-icon="heart"></span>河心最危险（冲走概率最高）
         </span>
       </section>
 
-      <footer data-role="footer">
-        黑先手，横、竖、斜任意方向连成五子即胜。<br>
-        冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
-        砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
-        冰块格不可落子；预警格可以落子，但要承担被砸的风险。
+      <footer data-role="footer" hidden>
+        <span data-role="footer-snow">
+          黑先手，横、竖、斜任意方向连成五子即胜。<br>
+          冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
+          砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
+          冰块格不可落子；预警格可以落子，但要承担被砸的风险。
+        </span>
+        <span data-role="footer-river">
+          黑先手，横、竖、斜任意方向连成五子即胜。<br>
+          第 8 回合起下雨，水位每回合 +2%（上限 80%）。水位到 30% / 60% 时
+          河流向两岸各扩 1 列，且永不缩回。<br>
+          河中棋子每回合按「水位 × 位置系数」被冲走：河心 1.0、次外圈 0.7、最外圈 0.4。
+        </span>
       </footer>
     </main>
   </div>
@@ -399,6 +441,7 @@
   <script src="src/core/types.js"></script>
   <script src="src/core/board.js"></script>
   <script src="src/core/arena.js"></script>
+  <script src="src/core/river.js"></script>
   <script src="src/core/rules.js"></script>
   <script src="src/core/mode.js"></script>
   <script src="src/render/board.js"></script>

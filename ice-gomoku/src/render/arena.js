@@ -17,6 +17,7 @@
   var T = G.Types;
   var B = G.Board;
   var Arena = G.Arena;
+  var River = G.River;
 
   // ── 几何参数（由 configure 写入）──────────────────────────────────────────
   var geom = {
@@ -57,13 +58,33 @@
 
     // 冰锥落下的闪光
     flash: 'rgba(255, 255, 255, 0.9)',
-    flashRing: 'rgba(160, 215, 255, 0.8)'
+    flashRing: 'rgba(160, 215, 255, 0.8)',
+
+    // 河流
+    riverShallow: [100, 180, 230],   // 水位 0 时的 RGB
+    riverDeep: [60, 130, 200],       // 水位 80% 时的 RGB
+    riverAlphaMin: 0.15,
+    riverAlphaMax: 0.45,
+    riverHeart: 'rgba(190, 235, 255, 0.16)',  // 河心高亮
+    riverEdge: 'rgba(120, 190, 235, 0.45)',
+    ripple: 'rgba(226, 245, 255, 0.9)',
+    rainDrop: 'rgba(196, 232, 255, 0.55)',
+
+    // 水位条
+    gaugeTrack: 'rgba(255, 255, 255, 0.14)',
+    gaugeLow: '#7ec8f0',
+    gaugeMid: '#4a90d9',
+    gaugeWarn: '#f0a24a',
+    gaugeDanger: '#e8543f',
+    gaugeText: 'rgba(214, 234, 248, 0.92)'
   };
 
   // ── 时间与动画 ──────────────────────────────────────────────────────────
   var FALL_MS = 200;        // 冰锥落下的闪光时长
   var KNOCK_MS = 260;       // 冰块生成动画时长
+  var RIPPLE_MS = 520;      // 棋子被冲走的水波时长
   var SNOWFLAKE_COUNT = 44;
+  var RAIN_STREAK_COUNT = 26;
 
   var clock = 0;            // 由 main.js 主循环推进的时钟（毫秒）
   var lastClock = 0;
@@ -71,6 +92,12 @@
 
   /** 冰锥落下动画：{ "x,y": 起始时刻 }。只影响绘制，不参与规则。 */
   var knockAt = {};
+
+  /** 棋子被冲走的水波：{ "x,y": 起始时刻 }。只影响绘制。 */
+  var rippleAt = {};
+
+  /** 雨丝（相对坐标 0..1，绘制时再换算），延迟初始化。 */
+  var rainStreaks = null;
 
   // ── 配置 ────────────────────────────────────────────────────────────────
 
@@ -135,6 +162,7 @@
     clock += dt;
 
     stepSnow(dt);
+    stepRain(dt);
   }
 
   /**
@@ -150,10 +178,25 @@
     }
   }
 
+  /**
+   * 记录被冲走棋子的位置，触发水波动画。
+   * 由 main.js 在结算后调用。纯视觉，不影响任何规则。
+   * @param {Array<{x:number,y:number}>} washed
+   */
+  function notifyWashed(washed) {
+    if (!washed) return;
+
+    for (var i = 0; i < washed.length; i++) {
+      rippleAt[T.cellKey(washed[i].x, washed[i].y)] = clock;
+    }
+  }
+
   /** 清空动画痕迹（重开时调用）。 */
   function resetEffects() {
     knockAt = {};
+    rippleAt = {};
     snowflakes = null;
+    rainStreaks = null;
     lastClock = clock;
   }
 
@@ -296,6 +339,273 @@
     drawBoardGlow(ctx, state);
   }
 
+  // ── 山谷溪流 ────────────────────────────────────────────────────────────
+
+  /** 水位（0..80）→ 河流底色。水位越高，蓝色越深。 */
+  function riverColor(level) {
+    var t = Math.min(1, Math.max(0, level / T.RIVER_MAX_WATER));
+    var a = COLORS.riverShallow;
+    var b = COLORS.riverDeep;
+
+    return 'rgba(' +
+      Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+      Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+      Math.round(a[2] + (b[2] - a[2]) * t) + ',' +
+      (COLORS.riverAlphaMin + (COLORS.riverAlphaMax - COLORS.riverAlphaMin) * t).toFixed(3) +
+      ')';
+  }
+
+  /** 河流区域：当前河列的整条纵向带。 */
+  function drawRiver(ctx, state) {
+    if (!River || !state.arenaState) return;
+
+    var columns = River.getColumns(state.arenaState);
+    if (columns.length === 0) return;
+
+    var level = state.arenaState.waterLevel || 0;
+    var first = columns[0];
+    var last = columns[columns.length - 1];
+    var box = cellBox(state, 0, 0);
+
+    var left = box.cx + (first - 0.5) * geom.cell;
+    var right = box.cx + (last + 0.5) * geom.cell;
+    var top = box.cy - 0.5 * geom.cell;
+    var height = (state.size - 1) * geom.cell + geom.cell;
+
+    ctx.save();
+    clipBoard(ctx, state);
+
+    // 水带主体
+    var grad = ctx.createLinearGradient(left, 0, right, 0);
+    var base = riverColor(level);
+    grad.addColorStop(0, base);
+    grad.addColorStop(0.5, riverColor(Math.min(T.RIVER_MAX_WATER, level + 18)));
+    grad.addColorStop(1, base);
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(left, top, right - left, height);
+
+    // 河心两列轻微高亮，暗示这里冲走概率最高
+    var heartLeft = box.cx + (6 - 0.5) * geom.cell;
+    var heartWidth = 2 * geom.cell;
+
+    ctx.fillStyle = COLORS.riverHeart;
+    ctx.fillRect(heartLeft, top, heartWidth, height);
+
+    // 水流线：横向细纹，随水位升高而更明显
+    ctx.strokeStyle = COLORS.riverEdge;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.25 + 0.4 * (level / T.RIVER_MAX_WATER);
+
+    for (var y = 0; y < state.size; y++) {
+      var cy = box.cy + y * geom.cell;
+      ctx.beginPath();
+      ctx.moveTo(left + 3, cy - geom.cell * 0.22);
+      ctx.lineTo(right - 3, cy - geom.cell * 0.22);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /** 每格的危险度：以河心为轴的径向渐变，越靠河心越亮。 */
+  function drawRiverDanger(ctx, state) {
+    if (!River || !state.arenaState) return;
+
+    var level = state.arenaState.waterLevel || 0;
+    if (level <= 0) return;
+
+    var box = cellBox(state, 0, 0);
+    var heartX = box.cx + T.RIVER_CENTER * geom.cell;
+
+    ctx.save();
+    clipBoard(ctx, state);
+
+    var grad = ctx.createRadialGradient(
+      heartX, box.cy, geom.cell * 0.5,
+      heartX, box.cy, geom.cell * 5.2
+    );
+    grad.addColorStop(0, 'rgba(210, 245, 255, ' + (0.16 * (level / T.RIVER_MAX_WATER)).toFixed(3) + ')');
+    grad.addColorStop(1, 'rgba(210, 245, 255, 0)');
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(
+      box.cx - geom.cell, box.cy - geom.cell,
+      (state.size + 1) * geom.cell, (state.size + 1) * geom.cell
+    );
+
+    ctx.restore();
+  }
+
+  /** 雨丝：水位 > 0 时在河流带内画斜线。 */
+  function initRain() {
+    rainStreaks = [];
+
+    for (var i = 0; i < RAIN_STREAK_COUNT; i++) {
+      rainStreaks.push({
+        u: Math.random(),              // 横向相对位置 0..1
+        y: Math.random(),              // 纵向起始位置 0..1
+        len: 0.05 + Math.random() * 0.06,
+        speed: 0.55 + Math.random() * 0.8
+      });
+    }
+  }
+
+  function stepRain(dt) {
+    if (!rainStreaks) return;
+
+    var seconds = dt / 1000;
+
+    for (var i = 0; i < rainStreaks.length; i++) {
+      var s = rainStreaks[i];
+      s.y += s.speed * seconds * 0.9;
+      if (s.y > 1.05) s.y -= 1.1;
+    }
+  }
+
+  function drawRain(ctx, state) {
+    if (!River || !state.arenaState) return;
+
+    var level = state.arenaState.waterLevel || 0;
+    if (level <= 0) return;
+
+    if (!rainStreaks) initRain();
+
+    var columns = River.getColumns(state.arenaState);
+    if (columns.length === 0) return;
+
+    var box = cellBox(state, 0, 0);
+    var left = box.cx + (columns[0] - 0.5) * geom.cell;
+    var right = box.cx + (columns[columns.length - 1] + 0.5) * geom.cell;
+    var top = box.cy - 0.5 * geom.cell;
+    var height = (state.size - 1) * geom.cell + geom.cell;
+
+    ctx.save();
+    clipBoard(ctx, state);
+    ctx.strokeStyle = COLORS.rainDrop;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = Math.min(1, 0.3 + level / T.RIVER_MAX_WATER);
+
+    for (var i = 0; i < rainStreaks.length; i++) {
+      var s = rainStreaks[i];
+      var x = left + (right - left) * s.u;
+      var y = top + height * s.y;
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 3, y + height * s.len);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /** 棋子被冲走的水波：扩散圆圈 + 两点飞溅。 */
+  function drawRipples(ctx, state) {
+    var key;
+
+    ctx.save();
+    clipBoard(ctx, state);
+
+    for (key in rippleAt) {
+      if (!Object.prototype.hasOwnProperty.call(rippleAt, key)) continue;
+
+      var age = clock - rippleAt[key];
+      if (age >= RIPPLE_MS) { delete rippleAt[key]; continue; }
+
+      var parts = key.split(',');
+      var box = cellBox(state, parseInt(parts[0], 10), parseInt(parts[1], 10));
+      var t = age / RIPPLE_MS;
+
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.strokeStyle = COLORS.ripple;
+      ctx.lineWidth = Math.max(1, geom.cell * 0.06 * (1 - t));
+      ctx.beginPath();
+      ctx.arc(box.cx, box.cy, geom.cell * (0.15 + 0.5 * t), 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.globalAlpha = (1 - t) * 0.7;
+      ctx.fillStyle = COLORS.ripple;
+      for (var k = 0; k < 2; k++) {
+        var ang = -Math.PI / 2 + (k === 0 ? -1 : 1) * 0.5;
+        var d = geom.cell * (0.2 + 0.55 * t);
+        ctx.beginPath();
+        ctx.arc(box.cx + Math.cos(ang) * d, box.cy + Math.sin(ang) * d,
+          Math.max(1, geom.cell * 0.05 * (1 - t)), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ── 水位指示条 ──────────────────────────────────────────────────────────
+
+  /** 水位越高颜色越警示：<60 蓝、≥60 橙、=80 红。 */
+  function gaugeColor(level) {
+    if (level >= T.RIVER_MAX_WATER) return COLORS.gaugeDanger;
+    if (level >= 60) return COLORS.gaugeWarn;
+    if (level >= 30) return COLORS.gaugeMid;
+    return COLORS.gaugeLow;
+  }
+
+  /**
+   * 在棋盘下方留白处画水位进度条 + 文字。
+   * 只占 margin 区域，不挤压棋盘。
+   */
+  function drawWaterGauge(ctx, state) {
+    if (!River || !state.arenaState) return;
+
+    var level = state.arenaState.waterLevel || 0;
+    var t = level / T.RIVER_MAX_WATER;
+
+    var x = geom.origin;
+    var width = (state.size - 1) * geom.cell;
+    var height = Math.max(5, geom.cell * 0.16);
+    var y = geom.origin + (state.size - 1) * geom.cell + Math.max(9, geom.margin * 0.32);
+
+    ctx.save();
+
+    // 轨道
+    roundRect(ctx, x, y, width, height, height / 2);
+    ctx.fillStyle = COLORS.gaugeTrack;
+    ctx.fill();
+
+    // 已蓄水量
+    if (t > 0) {
+      var grad = ctx.createLinearGradient(x, 0, x + width, 0);
+      grad.addColorStop(0, COLORS.gaugeLow);
+      grad.addColorStop(1, gaugeColor(level));
+
+      roundRect(ctx, x, y, Math.max(height, width * t), height, height / 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    // 30 / 60 阈值刻度
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1;
+    var marks = [T.RIVER_EXPANSIONS[0].level, T.RIVER_EXPANSIONS[1].level];
+
+    for (var i = 0; i < marks.length; i++) {
+      var mx = x + width * (marks[i] / T.RIVER_MAX_WATER);
+      ctx.beginPath();
+      ctx.moveTo(mx, y - 3);
+      ctx.lineTo(mx, y + height + 3);
+      ctx.stroke();
+    }
+
+    // 文字
+    ctx.fillStyle = COLORS.gaugeText;
+    ctx.font = '600 ' + Math.max(11, Math.round(geom.cell * 0.3)) +
+      'px "Microsoft YaHei", "PingFang SC", system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('水位 ' + level + '%', x + width, y - height);
+
+    ctx.restore();
+  }
+
   // ── 冰锥预警 ────────────────────────────────────────────────────────────
 
   /** 向下指的三角形路径。 */
@@ -349,27 +659,42 @@
   }
 
   /**
-   * 第二层：冰锥预警。在 drawBoard 之后、drawPieces 之前调用。
+   * 第二层：场地覆盖物。在 drawBoard 之后、drawPieces 之前调用。
+   *
+   * 按场地类型分派：
+   *   arenaState.spikes 存在  → 雪山洞穴：画冰锥预警
+   *   arenaState.riverColumns 存在 → 山谷溪流：画河流、危险度、雨丝
+   *   arenaState 为 null      → 经典模式：什么都不画
    *
    * @param {CanvasRenderingContext2D} ctx
    * @param {object} state
    */
-  /** 该格是否有预警（且该格没有棋子时画在格心）。 */
   function drawArena(ctx, state) {
     // 经典模式没有场地：arenaState 为 null，直接不画任何东西
     if (!state || !state.arenaState) return;
 
-    var spikes = Arena.spikeList(state.arenaState);
-    if (spikes.length === 0) return;
-
-    ctx.save();
-    clipBoard(ctx, state);
-
-    for (var i = 0; i < spikes.length; i++) {
-      drawSpikeIcon(ctx, state, spikes[i].x, spikes[i].y);
+    // 山谷溪流
+    if (state.arenaState.riverColumns) {
+      drawRiver(ctx, state);
+      drawRiverDanger(ctx, state);
+      drawRain(ctx, state);
+      return;
     }
 
-    ctx.restore();
+    // 雪山洞穴：冰锥预警
+    if (state.arenaState.spikes) {
+      var spikes = Arena.spikeList(state.arenaState);
+      if (spikes.length === 0) return;
+
+      ctx.save();
+      clipBoard(ctx, state);
+
+      for (var i = 0; i < spikes.length; i++) {
+        drawSpikeIcon(ctx, state, spikes[i].x, spikes[i].y);
+      }
+
+      ctx.restore();
+    }
   }
 
   // ── 冰块 ────────────────────────────────────────────────────────────────
@@ -495,6 +820,16 @@
   function drawArenaOverlay(ctx, state) {
     if (!state || !state.arenaState) return;
 
+    // 山谷溪流：水波画在棋子上方，最后叠加水位条
+    if (state.arenaState.riverColumns) {
+      drawRipples(ctx, state);
+      drawWaterGauge(ctx, state);
+      return;
+    }
+
+    // 雪山洞穴：冰块必须压在棋子上方
+    if (!state.arenaState.iceBlocks) return;
+
     var blocks = Arena.iceList(state.arenaState);
 
     ctx.save();
@@ -521,6 +856,7 @@
     cellBox: cellBox,
     tick: tick,
     notifyDrops: notifyDrops,
+    notifyWashed: notifyWashed,
     resetEffects: resetEffects,
     drawScene: drawScene,
     drawArena: drawArena,

@@ -3,45 +3,49 @@
 > 用途：记录每次协作的关键点、改动、遗留问题与后续注意事项。
 > 配套文件：同目录下的 `项目代码交接.txt`（代码风格与协作约定，长期有效，写代码前必读）。
 
-## 2026-10-03 首次协作：初始化 git 仓库
+## 索引（已完工且无后续影响，压缩为一行）
 
-- 项目建设：根目录 `git init -b main`，本地 `user.name/email` 已按约定写入仓库配置。
-- `.gitignore`：忽略 `.kagent/`、`.cursor/`、`.vscode/`、系统文件，另加 `node_modules/`、`dist/`、`*.log`、`*.sav` 等兜底条目；`.gitattributes` 为 `* text=auto`。
-- 技术栈确定：**纯静态 HTML + CSS + JS，无构建步骤**（双击 `index.html` 即运行），后续不再引入打包工具。
-- 已解决的环境坑（后续照做即可）：`五子奇境` 目录属主是 `BUILTIN\Administrators`（父目录与 `.git` 均为 Asus），git 会报 dubious ownership。因 git 读取仓库本地配置在属主校验之后，`safe.directory` 写在 `.git/config` 里**无效**，已写入全局 `C:\Users\Asus\.gitconfig`。另：系统 PATH 无 git，只能用 GitHub Desktop 自带的 git；本机 `HOME` 未设置，需显式 `$env:HOME = "C:\Users\Asus"` 才读得到全局配置（身份在其中已配好，`--local` 的 user 节可省）。
-- 当前代码量：零。仓库内仅有本文件夹两份文档与 `.gitignore`/`.gitattributes`，尚无源码骨架；未配置 remote（符合约定）。
+- 2026-10-03 首次协作：初始化 git 仓库 —— 仅环境坑仍有后续影响，保留如下。
+- 2026-10-03 第二次协作：五子棋原型 `ice-gomoku/` —— 架构约定已被后续三次协作沿用并细化，见下方各条。
 
-## 2026-10-03 第二次协作：五子棋原型 `ice-gomoku/`
+## 长期有效的约定与环境事项
 
-- 交付：`ice-gomoku/` 下 7 个文件（`index.html` + `src/core/{types,board,rules}.js` + `src/render/{board,arena}.js` + `src/main.js`）。普通 `<script src>` 按序加载，IIFE 挂 `window.Gomoku`，无构建、无第三方库、无 ES Module。
-- 分层：`drawBoard → drawArena → drawPieces` 三层顺序固定，写在 `main.js` 的 `render()` 里；`drawArena` 为空实现但每帧都被调用，`render/arena.js` 已备好 `clipBoard`/`boardRect` 供接入冰锥、溪流、雷区。
-- 关键约定：`cells` 只存 `0|1|2`，场地状态走 `state.arenaState`（当前恒为 `null`）；`advanceTurn(state)` 是独立函数，是场地事件（冰锥掉落、水位上涨、雷区倒计时）的唯一挂载点；落子流程为顺序调用，无事件总线。
-- 注意点：`advanceTurn` 才递增 `moveCount`，而胜负已分时不再调用它，故 HUD 手数改用 `Board.countStones(state)` 统计，避免少算制胜那一手。
-- 校验：已用 Node 临时脚本（3 套共 89 项，跑完即删）覆盖四方向五连、长连取五、断点不误判、点击容差、胜后拒绝落子、重开、HUD 与渲染调用顺序。**尚未在真实浏览器里跑过**，视觉效果待人工确认。
+- 环境坑（照做即可）：`五子奇境` 目录属主是 `BUILTIN\Administrators`（父目录与 `.git` 均为 Asus），git 报 dubious ownership。因 git 读仓库本地配置在属主校验**之后**，`safe.directory` 写 `.git/config` **无效**，已写入全局 `C:\Users\Asus\.gitconfig`。系统 PATH 无 git，只能用 GitHub Desktop 自带 git；本机 `HOME` 未设置，需显式 `$env:HOME = "C:\Users\Asus"` 才读得到全局配置（身份已配在其中）。
+- 技术栈：纯静态 HTML + CSS + JS，无构建、无第三方库、无 ES Module，双击 `index.html` 即运行。未配置 remote（只做本地提交）。
+- 架构总纲：普通 `<script src>` 按序加载，各文件 IIFE 挂 `window.Gomoku`。`cells` 只存 `0|1|2`，**场地状态一律走 `state.arenaState`**。落子流程为顺序调用，无事件总线、无插件系统。`advanceTurn(state)` 是场地事件的唯一挂载点。HUD 手数用 `Board.countStones(state)` 统计（胜负已分时不走 advanceTurn，用 moveCount 会少算制胜那一手）。
+- 当前 script 顺序（9 个）：`types → board → arena → river → rules → mode → render/board → render/arena → main`。
+- 当前渲染流程（5 步，写在 `main.js` 的 `render()`）：`drawScene`(洞穴背景) → `drawBoard` → `drawArena`(场地，棋子之下) → `drawPieces` → `drawArenaOverlay`(冰块/水波/水位条，**棋子之上**)。冰块必须压在棋子上方，故有 overlay 这一层。
+- 校验惯例：每次改动都用 Node 临时脚本（跑完即删）在模拟 DOM 里端到端验证，并回归前几个里程碑。**所有视觉效果均未在真实浏览器确认过，一律待用户人工验收。**
 
 ## 2026-10-03 第三次协作：雪山洞穴场地（冰锥 + 冰块）
 
-- 新增 `src/core/arena.js`（场地**规则**，只管数据）：`create` 建 `arenaState` 并补满 5 个预警；`settleTurns` 严格按「冰锥落下 → 冰块融化 → 补充预警」结算。**未把规则塞进 `render/arena.js`**，也没动 `core/rules.js` 的五连判定。
-- `index.html` 的 script 顺序变为：`types → board → arena → rules → render/board → render/arena → main`（新增 `core/arena.js`）。
-- 渲染由 3 层变 5 步：`drawScene`(洞穴背景) → `drawBoard` → `drawArena`(冰锥) → `drawPieces` → `drawArenaOverlay`(冰块)。**冰块必须画在棋子之后**才对，故拆出 overlay 一层。
-- 落子合法性新增 `Board.isLegal(board, arenaState, x, y)`：冰块格不可落子，预警格可落子。`Board.place` 刻意**不**查冰块，以保持棋盘数据与场地解耦；预警不阻止落子。
+- 新增 `src/core/arena.js`（场地**规则**，只管数据）：`settleTurns` 严格按「冰锥落下 → 冰块融化 → 补充预警」结算。**未把规则塞进 `render/arena.js`**，也没动 `core/rules.js` 的五连判定。
+- 落子合法性新增 `Board.isLegal(board, arenaState, x, y)`：冰块格不可落子，预警格可落子。`Board.place` 刻意**不**查冰块，以保持棋盘数据与场地解耦。
 - 踩到的坑（重要）：`settleTurns` 里冰锥先落下生成冰块（=2），紧接着的融化会把它扣成 1，**导致「持续 2 回合」实际只持续 1 回合**。修法：结算前先记下已存在的冰块 key，融化只结算这批，新冰当回合不扣。连带结论：冰块峰值上限是 `2 × 5 = 10`（两波共存），不是 5。
-- 视觉已做：洞穴岩壁 + 飘雪 + 冰川质感棋盘（`render/board.js` 配色同步）；预警为向下蓝三角（有子时挪到右上角以免被棋子盖住）；冰块为半透明圆角矩形 + 剩余回合小点；冰锥落下有 200ms 闪光与冰块弹入。**雪花/闪光依赖 `rAF` 时间戳驱动 `RenderArena.tick()`**。
-- 校验：Node 临时脚本 2 套共 111 项（跑完即删）。含 20000 次统计验证落下概率 30.00%、3000 回合长跑验证预警恒为 5 且状态自洽、冰块恰好持续 2 回合、成五不进结算、冰块格拒绝落子、500 回合后 `cells` 仍只含 `0|1|2`。**仍未在真实浏览器确认视觉效果**。
+- 视觉：洞穴岩壁 + 飘雪 + 冰川质感棋盘；预警为向下蓝三角（有子时挪到右上角以免被棋子盖住）；冰块为半透明圆角矩形 + 剩余回合小点。
+- 校验：Node 临时脚本 111 项（跑完即删），含 20000 次统计验证落下概率 30.00%。
 
 ## 2026-10-03 第四次协作：开始界面与模式选择
 
-- 新增 `src/core/mode.js`：`Gomoku.Modes` 一张表两个模式（`classic.arena = null`、`snow.arena = 'snow'`）+ `Modes.get(id)` 容错回退。**未做插件系统/注册表/动态加载**。script 顺序在 `rules.js` 后插入 `mode.js`。
-- `index.html` 改为两块 `<div class="screen">`：`#menu` 与 `#game`，用 **HTML `hidden` 属性 + CSS `.screen[hidden]{display:none}`** 切换（未用 JS 改 style，也未做过渡动画）。启动即停在菜单，不再自动开局。
-- `main.js` 顶层加 `appState = { screen:'menu'|'game', mode:'classic'|'snow' }`，配套 `isPlaying()` / `enterMode(id)` / `backToMenu()`；原 `restart()` 更名 `restartGame()`（`G.Main.restart` 仍保留该名以免破坏既有调用）。**模式决定场地**：`mode.arena === 'snow'` 才建 `arenaState`，否则为 `null`。
-- 渲染守卫：`render()`、`scheduleRender()`、`resizeCanvas()`、`ghostFromHover()`、`onKeyDown()` 全部在非 game 屏幕下提前返回。理由：菜单里画布是 `hidden`，`getBoundingClientRect()` 会全 0 导致尺寸/命中算错，且 `rAF` 动画（雪花）不该在菜单里空转。
-- 顺手做的（规格未要求，可改）：经典模式自动隐藏冰锥图例与场地说明文字；`Esc` 键返回菜单、`R` 键重开。
-- 菜单底色按规格用 `#1A1A2E`（叠一层冷光与游戏界面同源）。
-- 校验：Node 临时脚本 2 套共 92 项（80 项菜单/模式 + 12 项前两里程碑回归，跑完即删），覆盖 12 条验收标准：启动停在菜单、两种模式进入后 `arenaState` 分别为 `null`/正常、切模式棋盘干净、重开保留模式、返回菜单清盘、菜单下 `render` 不排队 rAF、两种模式各 300 回合后 `cells` 仍只含 `0|1|2`。**视觉仍待你在真实浏览器确认**。
+- 新增 `src/core/mode.js`：`Gomoku.Modes` 一张表 + `Modes.get(id)` 容错回退。**未做插件系统/注册表/动态加载**。
+- `index.html` 改为两块 `<div class="screen">`：`#menu` 与 `#game`，用 **HTML `hidden` 属性 + CSS `.screen[hidden]{display:none}`** 切换。启动即停在菜单，不再自动开局。
+- `main.js` 顶层加 `appState = { screen, mode }`，配套 `isPlaying()` / `enterMode(id)` / `backToMenu()`；原 `restart()` 更名 `restartGame()`（`G.Main.restart` 保留旧名）。**模式决定场地**：按 `mode.arena` 建立对应 `arenaState`，classic 为 `null`。
+- 渲染守卫：`render()`、`scheduleRender()`、`resizeCanvas()`、`ghostFromHover()`、`onKeyDown()` 全部在非 game 屏幕下提前返回。理由：菜单里画布是 `hidden`，`getBoundingClientRect()` 会全 0 导致尺寸/命中算错，且 `rAF` 动画不该在菜单里空转。
+- 顺手做的（规格未要求，可改）：经典模式自动隐藏场地图例与说明文字；`Esc` 返回菜单、`R` 重开。菜单底色按规格 `#1A1A2E`。
+- 校验：Node 临时脚本 92 项（跑完即删）。
 
 ## 2026-10-03 第五次协作：比分在返回菜单后清零
 
-- 需求：比分跨模式累计不合理，改为「返回菜单即清零」。
-- 改动只在 `main.js` 的 `backToMenu()` 里加 3 行：`score.black = 0; score.white = 0;` 并同步 HUD。**「重开」不动比分**（`restartGame` 不碰 score），两者语义不同：重开是继续这盘，返回菜单是结束本轮。
-- `backToMenu` 是回菜单的唯一入口（按钮与 `Esc` 都走它），所以清零放这里覆盖所有路径，不必在别处重复。
-- 校验：Node 临时脚本 18 项（跑完即删）——胜局累计到 2:0、重开保留比分、返回菜单清零、再进入后不继承旧比分、雪山与经典两模式一致、`Esc` 路径同样清零、重复返回菜单不出错。
+- 只在 `main.js` 的 `backToMenu()` 里加 3 行清零 `score` 并同步 HUD。**「重开」不动比分**（`restartGame` 不碰 score）：重开是继续这盘，返回菜单是结束本轮。
+- `backToMenu` 是回菜单的唯一入口（按钮与 `Esc` 都走它），清零放这里即覆盖所有路径。
+- 校验：Node 临时脚本 18 项（跑完即删）。
+
+## 2026-10-03 第六次协作：山谷溪流场地（水位 + 冲走）
+
+- 新增 `src/core/river.js`（场地**规则**，只管数据），与 `core/arena.js`（雪山）平级；`core/rules.js` 与 `core/board.js` 的五连逻辑未动。script 顺序在 `arena.js` 后插入 `river.js`。菜单加第三种模式，`Modes.river = { name:'山谷溪流', arena:'river' }`。
+- 河流为纵向列：初始 `[6,7]`，水位 ≥30 加 `[5,8]`，≥60 加 `[4,9]`；**扩展永久不缩回**（`updateWater` 只并入不裁剪）。冲走概率 = `waterLevel × 位置系数 / 100`，系数河心 1.0 / 次外圈 0.7 / 最外圈 0.4。
+- **水位公式的坑（重要）**：`waterLevel = min(80, max(0,(moveCount-7)*2))` 里的 `moveCount` 必须用**自增后**的值，否则第 8 回合算出来是 0 而不是 2。因此 river 的 `advanceTurn` 把 `moveCount++` 提到结算**之前**（与雪山的顺序不同）。实测关键节点：8→2、22→30、37→60、47→80。
+- 结算顺序：`moveCount++ → 水位 → 河流扩展 → 冲走 → 切换玩家`。扩展先于冲走，故新扩进来的列当回合就有风险（已测）。
+- 渲染：`drawArena` 现按场地类型分派（有 `riverColumns` 画河道/危险度/雨丝，有 `spikes` 画冰锥，`arenaState` 为 null 什么都不画）。水位条画在棋盘下方 margin 里，**不挤压棋盘**。新增 `notifyWashed` → 水波动画，与 `notifyDrops` 并列。
+- 顺带修的真 bug：`types.js` 里 `waterLevelAt` / `riverFactorOf` 误用了不存在的模块级变量名（应为 `Types.xxx`），会在**首次调用时就抛 ReferenceError**；另给 `board.js` 加了 `removeStone` 供两个场地复用。
+- 校验：Node 临时脚本 124 项（48 项溪流规则 + 76 项端到端/回归，跑完即删），含 20000 次统计验证三档概率实测 0.40/0.28/0.16。

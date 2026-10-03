@@ -112,6 +112,23 @@
     return true;
   }
 
+  /**
+   * 移除某格棋子（如有）。场地事件用：冰锥砸毁、河水冲走。
+   * 只动棋子，不碰场地状态。
+   *
+   * @param {object} board
+   * @param {number} x
+   * @param {number} y
+   * @returns {boolean} 是否确实移除了棋子
+   */
+  function removeStone(board, x, y) {
+    if (!isInside(board, x, y)) return false;
+    if (board.cells[indexOf(board, x, y)] === T.EMPTY) return false;
+
+    board.cells[indexOf(board, x, y)] = T.EMPTY;
+    return true;
+  }
+
   /** 清空全部格子，保留尺寸与对象本身。 */
   function clear(board) {
     board.cells.fill(T.EMPTY);
@@ -167,6 +184,7 @@
     getCell: getCell,
     setCell: setCell,
     place: place,
+    removeStone: removeStone,
     clear: clear,
     countStones: countStones,
     isFull: isFull,

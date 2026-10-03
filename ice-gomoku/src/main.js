@@ -21,6 +21,7 @@
   var B = G.Board;
   var Rules = G.Rules;
   var Arena = G.Arena;
+  var River = G.River;
   var Modes = G.Modes;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
@@ -58,6 +59,22 @@
 
   function $(role) {
     return document.querySelector('[data-role="' + role + '"]');
+  }
+
+  /**
+   * 取某 role 的全部元素。
+   * 优先用 querySelectorAll；不支持时（如测试用的极简 DOM 桩）退回逐个探测，
+   * 保证调用方拿到的始终是「可遍历 + 有 length」的对象。
+   */
+  function $all(role) {
+    if (typeof document.querySelectorAll === 'function') {
+      return document.querySelectorAll('[data-role="' + role + '"]');
+    }
+
+    var found = [];
+    var one = $(role);
+    if (one) found.push(one);
+    return found;
   }
 
   // ── 画布尺寸与缩放 ──────────────────────────────────────────────────────
@@ -162,19 +179,33 @@
     elements.moves.textContent = String(B.countStones(state));
     elements.score.textContent = score.black + ' : ' + score.white;
 
-    // 场地信息：只有启用了场地的模式（雪山洞穴）才有内容
-    if (state.arenaState) {
+    // 场地信息：按场地类型显示不同内容
+    var arena = state.arenaState;
+
+    if (arena && arena.riverColumns) {
+      elements.arena.textContent = '水位 ' + arena.waterLevel + '% · 河宽 ' + arena.riverColumns.length + ' 列';
+    } else if (arena) {
       elements.arena.textContent =
-        '预警 ' + Arena.countSpikes(state.arenaState) +
-        ' · 冰块 ' + Arena.countIceBlocks(state.arenaState);
+        '预警 ' + Arena.countSpikes(arena) +
+        ' · 冰块 ' + Arena.countIceBlocks(arena);
     } else {
       elements.arena.textContent = '—';
     }
 
-    // 经典模式没有冰锥/冰块，图例与说明随之隐藏
-    var showArenaLegend = !!mode.arena;
-    elements.legend.hidden = !showArenaLegend;
-    elements.footer.hidden = !showArenaLegend;
+    // 图例与说明按模式切换；经典模式两者都隐藏
+    var arenaKind = mode.arena || '';
+    var showLegend = !!arenaKind;
+
+    elements.legend.hidden = !showLegend;
+    elements.footer.hidden = !showLegend;
+
+    for (var i = 0; i < elements.legendSnow.length; i++) {
+      elements.legendSnow[i].hidden = arenaKind !== 'snow';
+      elements.legendRiver[i].hidden = arenaKind !== 'river';
+    }
+
+    elements.footerSnow.hidden = arenaKind !== 'snow';
+    elements.footerRiver.hidden = arenaKind !== 'river';
 
     canvas.classList.toggle('is-over', over);
   }
@@ -197,18 +228,30 @@
    * @param {object} state GameState
    */
   function advanceTurn(state) {
-    // 1~3. 场地结算（冰锥落下 → 冰块融化 → 补充预警）
-    if (state.arenaState) {
-      var settled = Arena.settleTurns(state, state.arenaState);
+    var arena = state.arenaState;
+
+    // 山谷溪流：顺序为「推进手数 → 水位 → 河流扩展 → 冲走判定 → 切换玩家」。
+    // 水位公式依赖推进后的 moveCount，故这里先自增。
+    if (arena && arena.riverColumns) {
+      state.moveCount++;                                          // 1
+      var river = River.settleRiver(state, arena, state.moveCount); // 2~4
+
+      // 通知渲染层做水波，纯视觉，不影响规则
+      RenderArena.notifyWashed(river.washed);
+
+      state.currentPlayer = state.currentPlayer === T.BLACK ? T.WHITE : T.BLACK; // 5
+      return;
+    }
+
+    // 雪山洞穴：顺序为「场地结算（冰锥落下 → 冰块融化 → 补充预警）→ 推进手数 → 切换玩家」
+    if (arena) {
+      var settled = Arena.settleTurns(state, arena);
 
       // 通知渲染层做落下闪光，纯视觉，不影响规则
       RenderArena.notifyDrops(settled.drops);
     }
 
-    // 4. 推进手数
     state.moveCount++;
-
-    // 5. 切换玩家
     state.currentPlayer = state.currentPlayer === T.BLACK ? T.WHITE : T.BLACK;
   }
 
@@ -269,6 +312,7 @@
    * 场地是否启用完全由模式的 arena 字段决定：
    *   classic → arena: null    → arenaState = null，纯五子棋
    *   snow    → arena: 'snow'  → 建立 arenaState 并补满 5 个冰锥预警
+   *   river   → arena: 'river' → 建立河流状态（水位 0，河宽 2 列）
    */
   function restartGame() {
     window.clearTimeout(winNoticeTimer);
@@ -281,11 +325,13 @@
 
     if (mode.arena === 'snow') {
       state.arenaState = Arena.create(state);
+    } else if (mode.arena === 'river') {
+      state.arenaState = River.create();
     } else {
       state.arenaState = null;   // 经典模式没有场地
     }
 
-    // 清掉上一局残留的动画痕迹（闪光、雪花位置）
+    // 清掉上一局残留的动画痕迹（闪光、雪花、水波）
     RenderArena.resetEffects();
 
     render();
@@ -399,6 +445,7 @@
 
     elements.modeClassicBtn.addEventListener('click', function () { enterMode('classic'); });
     elements.modeSnowBtn.addEventListener('click', function () { enterMode('snow'); });
+    elements.modeRiverBtn.addEventListener('click', function () { enterMode('river'); });
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', resizeCanvas);
@@ -422,10 +469,16 @@
     elements.legend = $('legend');
     elements.footer = $('footer');
 
+    elements.legendSnow = $all('legend-snow');
+    elements.legendRiver = $all('legend-river');
+    elements.footerSnow = $('footer-snow');
+    elements.footerRiver = $('footer-river');
+
     elements.restartBtn = $('btn-restart');
     elements.backBtn = $('btn-back');
     elements.modeClassicBtn = $('btn-mode-classic');
     elements.modeSnowBtn = $('btn-mode-snow');
+    elements.modeRiverBtn = $('btn-mode-river');
 
     // 启动时停在开始界面：先看到菜单，不自动开局
     state = T.createGameState(T.DEFAULT_SIZE);
