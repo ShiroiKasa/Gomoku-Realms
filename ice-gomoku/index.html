@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>五子奇境 · 五子棋原型</title>
+  <style>
+    :root {
+      --bg: #121d2a;
+      --bg-2: #0b131d;
+      --panel: rgba(255, 255, 255, 0.05);
+      --panel-line: rgba(158, 216, 255, 0.18);
+      --ink: #dcecf8;
+      --ink-dim: #8aa6bd;
+      --ice: #6fd3ff;
+      --black-stone: #101a24;
+      --white-stone: #f2f7fb;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      padding: 28px 16px 40px;
+      background: radial-gradient(1100px 620px at 50% -12%, #1d3549 0%, var(--bg) 42%, var(--bg-2) 100%);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+    }
+
+    h1 .sub {
+      display: block;
+      margin-top: 6px;
+      font-size: 12px;
+      font-weight: 400;
+      letter-spacing: 0.28em;
+      color: var(--ink-dim);
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* ── 状态栏 ─────────────────────────────────────────── */
+    .hud {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .hud-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 118px;
+      padding: 8px 14px;
+      border: 1px solid var(--panel-line);
+      border-radius: 999px;
+      background: var(--panel);
+      backdrop-filter: blur(6px);
+      font-size: 13px;
+    }
+
+    .hud-label {
+      color: var(--ink-dim);
+      letter-spacing: 0.06em;
+    }
+
+    .hud-value {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+
+    .turn-dot {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+      transition: background 0.16s ease;
+    }
+
+    /* ── 棋盘画布 ───────────────────────────────────────── */
+    .board-wrap {
+      position: relative;
+      line-height: 0;
+      border-radius: 16px;
+      border: 1px solid var(--panel-line);
+      box-shadow:
+        0 22px 60px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+    }
+
+    canvas#board {
+      display: block;
+      border-radius: 15px;
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    canvas#board.is-over {
+      cursor: default;
+    }
+
+    /* ── 操作区 ─────────────────────────────────────────── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    button {
+      padding: 9px 22px;
+      border: 1px solid rgba(111, 211, 255, 0.42);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(111, 211, 255, 0.2), rgba(111, 211, 255, 0.08));
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 14px;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: background 0.16s ease, opacity 0.16s ease, transform 0.08s ease;
+    }
+
+    button:hover { background: rgba(111, 211, 255, 0.3); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+
+    footer {
+      max-width: 660px;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.9;
+      color: var(--ink-dim);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>五子奇境<span class="sub">五子棋原型 · 场地机制预留</span></h1>
+  </header>
+
+  <main>
+    <section class="hud">
+      <div class="hud-item">
+        <span class="turn-dot" data-role="turn-dot"></span>
+        <span class="hud-label">当前</span>
+        <span class="hud-value" data-role="turn">黑棋</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">手数</span>
+        <span class="hud-value" data-role="moves">0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">比分</span>
+        <span class="hud-value" data-role="score">0 : 0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">场地</span>
+        <span class="hud-value" data-role="arena">—</span>
+      </div>
+    </section>
+
+    <div class="board-wrap">
+      <canvas id="board"></canvas>
+    </div>
+
+    <section class="controls">
+      <button type="button" data-role="btn-restart">重开</button>
+    </section>
+
+    <footer>
+      黑先手，横、竖、斜任意方向连成五子即胜。<br>
+      冰锥、溪流、雷区等场地规则将在后续阶段接入，本阶段仅保留挂载点。
+    </footer>
+  </main>
+
+  <!-- 普通 script 标签按依赖顺序加载（不使用 ES Module） -->
+  <script src="src/core/types.js"></script>
+  <script src="src/core/board.js"></script>
+  <script src="src/core/rules.js"></script>
+  <script src="src/render/board.js"></script>
+  <script src="src/render/arena.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>

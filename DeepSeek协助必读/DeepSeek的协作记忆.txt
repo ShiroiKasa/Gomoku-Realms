@@ -10,3 +10,11 @@
 - 技术栈确定：**纯静态 HTML + CSS + JS，无构建步骤**（双击 `index.html` 即运行），后续不再引入打包工具。
 - 已解决的环境坑（后续照做即可）：`五子奇境` 目录属主是 `BUILTIN\Administrators`（父目录与 `.git` 均为 Asus），git 会报 dubious ownership。因 git 读取仓库本地配置在属主校验之后，`safe.directory` 写在 `.git/config` 里**无效**，已写入全局 `C:\Users\Asus\.gitconfig`。另：系统 PATH 无 git，只能用 GitHub Desktop 自带的 git；本机 `HOME` 未设置，需显式 `$env:HOME = "C:\Users\Asus"` 才读得到全局配置（身份在其中已配好，`--local` 的 user 节可省）。
 - 当前代码量：零。仓库内仅有本文件夹两份文档与 `.gitignore`/`.gitattributes`，尚无源码骨架；未配置 remote（符合约定）。
+
+## 2026-10-03 第二次协作：五子棋原型 `ice-gomoku/`
+
+- 交付：`ice-gomoku/` 下 7 个文件（`index.html` + `src/core/{types,board,rules}.js` + `src/render/{board,arena}.js` + `src/main.js`）。普通 `<script src>` 按序加载，IIFE 挂 `window.Gomoku`，无构建、无第三方库、无 ES Module。
+- 分层：`drawBoard → drawArena → drawPieces` 三层顺序固定，写在 `main.js` 的 `render()` 里；`drawArena` 为空实现但每帧都被调用，`render/arena.js` 已备好 `clipBoard`/`boardRect` 供接入冰锥、溪流、雷区。
+- 关键约定：`cells` 只存 `0|1|2`，场地状态走 `state.arenaState`（当前恒为 `null`）；`advanceTurn(state)` 是独立函数，是场地事件（冰锥掉落、水位上涨、雷区倒计时）的唯一挂载点；落子流程为顺序调用，无事件总线。
+- 注意点：`advanceTurn` 才递增 `moveCount`，而胜负已分时不再调用它，故 HUD 手数改用 `Board.countStones(state)` 统计，避免少算制胜那一手。
+- 校验：已用 Node 临时脚本（3 套共 89 项，跑完即删）覆盖四方向五连、长连取五、断点不误判、点击容差、胜后拒绝落子、重开、HUD 与渲染调用顺序。**尚未在真实浏览器里跑过**，视觉效果待人工确认。
