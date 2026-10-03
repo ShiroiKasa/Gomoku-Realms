@@ -305,7 +305,7 @@
     restartGame();
   }
 
-  /** 返回菜单：清空棋盘、停止对局。 */
+  /** 返回菜单：清空棋盘、清零比分、停止对局。 */
   function backToMenu() {
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = null;
@@ -316,6 +316,11 @@
     hover = null;
     state = T.createGameState(T.DEFAULT_SIZE);
     state.arenaState = null;
+
+    // 比分只在返回菜单时清零（「重开」保留比分）
+    score.black = 0;
+    score.white = 0;
+    elements.score.textContent = '0 : 0';
 
     ctx.clearRect(0, 0, boardPx, boardPx);
 
