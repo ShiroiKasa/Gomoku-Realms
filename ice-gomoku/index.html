@@ -338,6 +338,65 @@
       background: rgba(255, 255, 255, 0.02);
     }
 
+    /* ── 对手（人人 / 电脑三档）─────────────────────────────
+       菜单与游戏内共用一套 .pick-* 样式：菜单里用浅色变量，
+       游戏里用主题强调色变量，两者互不干扰。                */
+    .menu-opponent {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 9px;
+      margin-top: 20px;
+    }
+
+    .menu-opponent-label {
+      font-size: 11px;
+      letter-spacing: 0.26em;
+      color: var(--ink-faint);
+    }
+
+    .pick {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .pick-btn {
+      padding: 6px 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--ink-dim);
+      font-family: inherit;
+      font-size: 12.5px;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease,
+        box-shadow 0.16s ease;
+    }
+
+    .pick-btn:hover {
+      border-color: var(--pick-accent, var(--accent));
+      color: var(--ink);
+      background: var(--pick-accent-soft, var(--accent-soft));
+    }
+
+    .pick-btn:focus-visible { outline: 2px solid var(--pick-accent, var(--accent)); outline-offset: 2px; }
+
+    .pick-btn[aria-pressed="true"] {
+      border-color: transparent;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(6, 24, 38, 0.2)),
+        var(--pick-accent, var(--accent));
+      color: #05131d;
+      font-weight: 600;
+      box-shadow: 0 8px 20px -10px var(--pick-accent-glow, var(--accent-glow));
+    }
+
+    /* 电脑档位在菜单里用暖色区分，游戏内沿用模式强调色 */
+    #menu .pick-btn[data-ai-level="hard"] { --pick-accent: #ffb27a; --pick-accent-soft: rgba(255, 178, 122, 0.18); --pick-accent-glow: rgba(255, 178, 122, 0.45); }
+
     /* ── 游戏界面 ───────────────────────────────────────── */
     header { text-align: center; }
 
@@ -547,6 +606,68 @@
       font-size: 11px;
       color: var(--ink-dim);
     }
+
+    /* ── 电脑对手状态 ───────────────────────────────────── */
+    .ai-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .ai-status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 168px;
+      padding: 7px 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
+        var(--glass);
+      font-size: 12.5px;
+      color: var(--ink-dim);
+      transition: border-color 0.18s ease, color 0.18s ease;
+    }
+
+    /* 轮到自己时高亮，轮对手思考时保持静默 */
+    .ai-status[data-thinking="1"] {
+      border-color: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    .ai-status[data-off="1"] { opacity: 0.55; }
+
+    /* 思考中的三点脉冲 */
+    .ai-dots {
+      display: inline-flex;
+      gap: 3px;
+      flex: 0 0 auto;
+    }
+
+    .ai-dots i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.35;
+    }
+
+    .ai-status[data-thinking="1"] .ai-dots i {
+      animation: aiPulse 1.1s ease-in-out infinite;
+    }
+
+    .ai-status[data-thinking="1"] .ai-dots i:nth-child(2) { animation-delay: 0.16s; }
+    .ai-status[data-thinking="1"] .ai-dots i:nth-child(3) { animation-delay: 0.32s; }
+
+    @keyframes aiPulse {
+      0%, 100% { opacity: 0.25; transform: translateY(0); }
+      45% { opacity: 1; transform: translateY(-2px); }
+    }
+
+    #game .pick-btn { font-size: 12px; padding: 6px 13px; }
 
     /* ── 图例 ───────────────────────────────────────────── */
     .legend {
@@ -904,7 +1025,17 @@
         </button>
       </div>
 
-      <p class="menu-version">v0.6 · 本地原型 · 无外部依赖</p>
+      <div class="menu-opponent">
+        <span class="menu-opponent-label">对手</span>
+        <div class="pick" data-role="pick-levels">
+          <button type="button" class="pick-btn" data-ai-level="human" data-role="btn-level-human" aria-pressed="true">人人对战</button>
+          <button type="button" class="pick-btn" data-ai-level="easy" data-role="btn-level-easy">电脑 · 简单</button>
+          <button type="button" class="pick-btn" data-ai-level="normal" data-role="btn-level-normal">电脑 · 普通</button>
+          <button type="button" class="pick-btn" data-ai-level="hard" data-role="btn-level-hard">电脑 · 困难</button>
+        </div>
+      </div>
+
+      <p class="menu-version">v0.7</p>
     </div>
   </div>
 
@@ -946,6 +1077,19 @@
       <section class="controls">
         <button type="button" data-role="btn-restart">重开</button>
         <button type="button" class="btn-ghost" data-role="btn-back">返回菜单</button>
+      </section>
+
+      <section class="ai-bar">
+        <div class="pick" data-role="game-levels">
+          <button type="button" class="pick-btn" data-ai-level="human" data-role="gbtn-level-human">人人对战</button>
+          <button type="button" class="pick-btn" data-ai-level="easy" data-role="gbtn-level-easy">电脑 · 简单</button>
+          <button type="button" class="pick-btn" data-ai-level="normal" data-role="gbtn-level-normal">电脑 · 普通</button>
+          <button type="button" class="pick-btn" data-ai-level="hard" data-role="gbtn-level-hard">电脑 · 困难</button>
+        </div>
+        <div class="ai-status" data-role="ai-status" data-thinking="0" data-off="1">
+          <span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span data-role="ai-text">人人对战</span>
+        </div>
       </section>
 
       <p class="hint"><kbd>R</kbd> 重开 <kbd>Esc</kbd> 返回菜单</p>
@@ -1037,6 +1181,7 @@
   <script src="src/core/mine.js"></script>
   <script src="src/core/rules.js"></script>
   <script src="src/core/mode.js"></script>
+  <script src="src/core/ai.js"></script>
   <script src="src/render/art.js"></script>
   <script src="src/render/theme.js"></script>
   <script src="src/render/scene.js"></script>
