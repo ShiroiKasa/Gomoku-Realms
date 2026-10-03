@@ -4,14 +4,15 @@
  * 职责：持有应用状态与游戏状态、绑定事件、按固定顺序驱动渲染。
  * 刻意保持「顺序调用」的直白写法——不使用回调、事件总线或观察者模式。
  *
- * 顶层状态只有两个屏幕、两个模式：
- *   appState = { screen: 'menu' | 'game', mode: 'classic' | 'snow' }
+ * 顶层状态只有两个屏幕、四个模式：
+ *   appState = { screen: 'menu' | 'game', mode: 'classic' | 'snow' | 'river' | 'mine' }
  * 模式决定是否启用场地（见 core/mode.js）。
  *
  * 落子流程（固定顺序）：
  *   检查合法性 → 落子 → 判五连 → 若胜则结束 → advanceTurn → render
  *
- * 场地「雪山洞穴」的事件挂在 advanceTurn 里，见该函数注释。
+ * 渲染循环：对局中由 rAF 连续驱动（场地的雪/水纹/辉光都是连续动画），
+ * 退回菜单后循环自然停住。各场地事件挂在 advanceTurn 里，见该函数注释。
  */
 (function () {
   'use strict';
@@ -30,7 +31,9 @@
   // ── 棋盘尺寸 ────────────────────────────────────────────────────────────
   var BOARD_PX = 640;        // 目标边长（CSS 像素）
   var MIN_BOARD_PX = 300;
-  var BOARD_MARGIN = 34;     // 棋盘外留白，保证边线上的棋子不被裁掉
+  var MARGIN_RATIO = 0.085;  // 石板外留白占边长的比例——这段留白就是洞穴岩壁
+  var MIN_MARGIN = 18;
+  var MAX_MARGIN = 56;
 
   // ── 模块状态 ────────────────────────────────────────────────────────────
   var state = null;          // GameState
@@ -41,9 +44,11 @@
   var boardPx = BOARD_PX;
   var hover = null;          // { x, y } 鼠标所在交叉点
   var renderQueued = false;
+  var reducedMotion = false; // 系统「减少动态效果」时不再连续重绘
 
   var score = { black: 0, white: 0 };
   var winNoticeTimer = null;
+  var hudCache = {};         // HUD 只在值变化时才写 DOM（连续重绘下必须节流）
 
   // ── 顶层状态：只有两个屏幕、两个模式 ────────────────────────────────────
   var appState = {
@@ -80,11 +85,20 @@
 
   // ── 画布尺寸与缩放 ──────────────────────────────────────────────────────
 
-  /** 依窗口宽度决定棋盘边长，保持棋盘完整可见。 */
+  /** 依窗口宽高决定棋盘边长，保持整块石板完整可见。 */
   function computeBoardSize() {
-    var available = window.innerWidth - 48;
-    var px = Math.min(BOARD_PX, available);
+    var byWidth = (window.innerWidth || BOARD_PX) - 48;
+    var byHeight = (window.innerHeight || 0) - 216;   // 顺便让上下内容也尽量留在屏内
+    var px = Math.min(BOARD_PX, byWidth);
+
+    if (byHeight > 0) px = Math.min(px, byHeight);
+
     return Math.max(MIN_BOARD_PX, Math.floor(px));
+  }
+
+  /** 石板外留白：就是洞穴岩壁的可见宽度，随边长缩放并夹在区间内。 */
+  function computeMargin(px) {
+    return Math.round(Math.max(MIN_MARGIN, Math.min(MAX_MARGIN, px * MARGIN_RATIO)));
   }
 
   function resizeCanvas() {
@@ -103,14 +117,23 @@
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    RenderBoard.configure(boardPx, BOARD_MARGIN);
-    RenderArena.configure(boardPx, BOARD_MARGIN);
+    var margin = computeMargin(boardPx);
+    RenderBoard.configure(boardPx, margin, dpr);
+    RenderArena.configure(boardPx, margin, dpr);
 
     scheduleRender();
   }
 
   // ── 渲染主循环 ──────────────────────────────────────────────────────────
 
+  /**
+   * 排一帧渲染。
+   *
+   * 关键点：这里会在帧末**继续排下一帧**，形成一个只在对局中运行的循环。
+   * 场地里的飘雪、水纹、爆炸余晖、五连辉光都是连续动画，只在事件（落子/移动鼠标）
+   * 时重绘的话它们会整帧冻住——所以只要 isPlaying() 为真就一直画下去；
+   * 退回菜单后 isPlaying() 变假，循环在下一帧自然停住，画布不再空转。
+   */
   function scheduleRender() {
     if (!isPlaying()) return;
     if (renderQueued) return;
@@ -122,18 +145,26 @@
       // 已经退回菜单就不再继续画（雪花动画也随之停下）
       if (!isPlaying()) return;
 
-      // 推进场地动画时钟（雪花飘落、冰锥闪光、冰块弹入）
-      RenderArena.tick(typeof now === 'number' ? now : 0);
+      var stamp = typeof now === 'number' ? now : 0;
+
+      // 推进动画时钟（雪花飘落、水纹、闪光、棋子弹入、五连辉光）
+      RenderArena.tick(stamp);
+      RenderBoard.tick(stamp);
 
       render();
+
+      if (!reducedMotion) scheduleRender();
     });
   }
 
   /**
-   * 渲染分多层，顺序固定：
-   *   drawScene（洞穴背景）→ drawBoard → drawArena（冰锥）→ drawPieces → drawArenaOverlay（冰块）
+   * 渲染分七层，顺序固定：
+   *   drawScene（洞穴背景）→ drawBoard（石板/格线/星位）→ drawArena（场地，棋子之下）
+   *   → drawPieces（棋子）→ drawMinePreview（雷区悬停）→ drawArenaOverlay（冰块等，棋子之上）
+   *   → drawAtmosphere（冷光/霜花/前景雪/暗角/胜利聚焦，最上层）
    *
-   * 冰块必须画在棋子之后，否则压不住棋子。
+   * 冰块、雷区数字必须画在棋子之后，否则压不住棋子；
+   * 氛围层必须最后画，否则压不住任何东西。
    */
   function render() {
     // 菜单界面下画布不可见，也不该继续绘制
@@ -143,12 +174,13 @@
 
     var ghost = ghostFromHover();
 
-    RenderArena.drawScene(ctx, state);            // 洞穴背景（棋盘之下）
-    RenderBoard.drawBoard(ctx, state);            // 第一层：格子线
-    RenderArena.drawArena(ctx, state, ghost);     // 第二层：场地（棋子之下）
-    RenderBoard.drawPieces(ctx, state, ghost);    // 第三层：棋子
-    RenderArena.drawMinePreview(ctx, state, ghost); // 雷区悬停：3×3 爆炸范围（棋子之上）
-    RenderArena.drawArenaOverlay(ctx, state);     // 冰块/水波/水位条/雷区数字（最上层）
+    RenderArena.drawScene(ctx, state);              // 洞穴背景（石板之下）
+    RenderBoard.drawBoard(ctx, state);              // 石板 + 格子线 + 星位
+    RenderArena.drawArena(ctx, state, ghost);       // 场地（棋子之下）
+    RenderBoard.drawPieces(ctx, state, ghost);      // 棋子
+    RenderArena.drawMinePreview(ctx, state, ghost); // 雷区悬停：3×3 爆炸范围
+    RenderArena.drawArenaOverlay(ctx, state);       // 冰块/水波/水位条/雷区数字
+    RenderArena.drawAtmosphere(ctx, state);         // 氛围与胜利聚焦（最上层）
 
     updateHud();
   }
@@ -162,38 +194,65 @@
     return { x: hover.x, y: hover.y, player: state.currentPlayer };
   }
 
+  /** 只在值确实变化时写 DOM：连续重绘时每帧写 HUD 会白白触发布局。 */
+  function setText(el, key, value) {
+    if (!el || hudCache[key] === value) return;
+    hudCache[key] = value;
+    el.textContent = value;
+  }
+
+  /** 同理，只在变化时改样式 / 类名。 */
+  function setStyle(el, key, prop, value) {
+    if (!el || hudCache[key] === value) return;
+    hudCache[key] = value;
+    el.style[prop] = value;
+  }
+
+  function setToggle(el, key, cls, on) {
+    if (!el || hudCache[key] === on) return;
+    hudCache[key] = on;
+    el.classList.toggle(cls, on);
+  }
+
+  function setHidden(el, key, hidden) {
+    if (!el || hudCache[key] === hidden) return;
+    hudCache[key] = hidden;
+    el.hidden = hidden;
+  }
+
   function updateHud() {
     var over = state.winner !== T.WINNER_NONE;
     var mode = Modes.get(appState.mode);
 
-    elements.mode.textContent = mode.name;
+    setText(elements.mode, 'mode', mode.name);
 
-    elements.turn.textContent = over
+    setText(elements.turn, 'turn', over
       ? T.nameOf(state.winner) + '胜'
-      : T.nameOf(state.currentPlayer);
+      : T.nameOf(state.currentPlayer));
 
-    elements.turnDot.style.background = over
+    setStyle(elements.turnDot, 'turnDot', 'background', over
       ? (state.winner === T.BLACK ? '#1b2b3a' : '#eef5fb')
-      : (state.currentPlayer === T.BLACK ? '#1b2b3a' : '#eef5fb');
+      : (state.currentPlayer === T.BLACK ? '#1b2b3a' : '#eef5fb'));
 
     // 手数以棋盘上的棋子数为准：胜负分出时不再走 advanceTurn，
     // 若沿用 state.moveCount 会少算制胜的那一手。
-    elements.moves.textContent = String(B.countStones(state));
-    elements.score.textContent = score.black + ' : ' + score.white;
+    setText(elements.moves, 'moves', String(B.countStones(state)));
+    setText(elements.score, 'score', score.black + ' : ' + score.white);
 
     // 场地信息：按场地类型显示不同内容
     var arena = state.arenaState;
 
     if (arena && arena.mines) {
-      elements.arena.textContent = '雷区 ' + Mine.countMines(arena);
+      setText(elements.arena, 'arena', '雷区 ' + Mine.countMines(arena));
     } else if (arena && arena.riverColumns) {
-      elements.arena.textContent = '水位 ' + arena.waterLevel + '% · 河宽 ' + arena.riverColumns.length + ' 列';
+      setText(elements.arena, 'arena',
+        '水位 ' + arena.waterLevel + '% · 河宽 ' + arena.riverColumns.length + ' 列');
     } else if (arena) {
-      elements.arena.textContent =
+      setText(elements.arena, 'arena',
         '预警 ' + Arena.countSpikes(arena) +
-        ' · 冰块 ' + Arena.countIceBlocks(arena);
+        ' · 冰块 ' + Arena.countIceBlocks(arena));
     } else {
-      elements.arena.textContent = '—';
+      setText(elements.arena, 'arena', '—');
     }
 
     // 图例只在有场地的模式显示；规则面板每个模式都有（含经典）。
@@ -201,8 +260,14 @@
     // 否则 arenaKind 会变成 ''，四个规则块都会被判为「不匹配」而全部隐藏。
     var arenaKind = mode.arena || mode.id;
 
-    elements.legend.hidden = !mode.arena;
-    elements.rulesMode.textContent = mode.name;
+    // 让 CSS 里的 --accent 跟着模式走（HUD、按钮、面板的强调色）
+    if (elements.game && hudCache.gameMode !== appState.mode) {
+      hudCache.gameMode = appState.mode;
+      elements.game.setAttribute('data-mode', appState.mode);
+    }
+
+    setHidden(elements.legend, 'legend', !mode.arena);
+    setText(elements.rulesMode, 'rulesMode', mode.name);
 
     for (var i = 0; i < elements.legendSnow.length; i++) {
       elements.legendSnow[i].hidden = arenaKind !== 'snow';
@@ -215,7 +280,7 @@
     elements.rulesRiver.hidden = arenaKind !== 'river';
     elements.rulesMine.hidden = arenaKind !== 'mine';
 
-    canvas.classList.toggle('is-over', over);
+    setToggle(canvas, 'isOver', 'is-over', over);
   }
 
   // ── 回合推进（独立函数，场地事件的挂载点）──────────────────────────────
@@ -323,15 +388,40 @@
     render();
   }
 
+  /**
+   * 胜负揭晓：改用页面内的结果卡，不再用 window.alert 打断画面。
+   * 稍作延迟，让五连辉光先亮起来。
+   */
   function announceWin(player) {
-    var text = T.nameOf(player) + '连成五子，获胜！\n共用 ' + state.moveCount + ' 手。\n\n点击「确定」开始新的一局。';
-
-    // 稍作延迟，让胜负高亮先画出来
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = window.setTimeout(function () {
-      window.alert(text);
-      restartGame();
-    }, 220);
+      if (!isPlaying() || state.winner === T.WINNER_NONE) return;
+      showVictory(player);
+    }, 420);
+  }
+
+  /** 显示对局结果卡（胜负已分，落子流程本来就不会再走）。 */
+  function showVictory(player) {
+    if (!elements.victory) return;
+
+    var stones = state.winningLine ? state.winningLine.length : T.WIN_COUNT;
+
+    setText(elements.victoryTitle, 'vTitle', T.nameOf(player) + '连成五子');
+    setText(elements.victorySub, 'vSub',
+      '本局共 ' + B.countStones(state) + ' 手 · 连续 ' + stones + ' 子 · 比分 ' +
+      score.black + ' : ' + score.white);
+
+    elements.victory.hidden = false;
+    hudCache.victory = false;
+
+    if (elements.victoryAgain && elements.victoryAgain.focus) elements.victoryAgain.focus();
+  }
+
+  function hideVictory() {
+    if (!elements.victory || elements.victory.hidden) return;
+
+    elements.victory.hidden = true;
+    hudCache.victory = true;
   }
 
   // ── 开局与重开 ──────────────────────────────────────────────────────────
@@ -349,6 +439,8 @@
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = null;
 
+    hideVictory();
+
     var mode = Modes.get(appState.mode);
 
     hover = null;
@@ -364,8 +456,9 @@
       state.arenaState = null;   // 经典模式没有场地
     }
 
-    // 清掉上一局残留的动画痕迹（闪光、雪花、水波、爆炸）
+    // 清掉上一局残留的动画痕迹（闪光、雪花、水波、爆炸、弹入、五连辉光）
     RenderArena.resetEffects();
+    RenderBoard.resetEffects();
 
     render();
   }
@@ -377,8 +470,12 @@
     appState.mode = Modes.get(modeId).id;
     appState.screen = 'game';
 
+    hideVictory();
+
     elements.menu.hidden = true;
     elements.game.hidden = false;
+    elements.game.setAttribute('data-mode', appState.mode);
+    hudCache.gameMode = appState.mode;
 
     resizeCanvas();     // 画布此时才可见，尺寸在这里确定
     restartGame();
@@ -388,6 +485,8 @@
   function backToMenu() {
     window.clearTimeout(winNoticeTimer);
     winNoticeTimer = null;
+
+    hideVictory();
 
     appState.screen = 'menu';
 
@@ -399,7 +498,7 @@
     // 比分只在返回菜单时清零（「重开」保留比分）
     score.black = 0;
     score.white = 0;
-    elements.score.textContent = '0 : 0';
+    setText(elements.score, 'score', '0 : 0');
 
     ctx.clearRect(0, 0, boardPx, boardPx);
 
@@ -481,6 +580,13 @@
     elements.modeRiverBtn.addEventListener('click', function () { enterMode('river'); });
     elements.modeMineBtn.addEventListener('click', function () { enterMode('mine'); });
 
+    if (elements.victoryAgain) {
+      elements.victoryAgain.addEventListener('click', restartGame);
+    }
+    if (elements.victoryBack) {
+      elements.victoryBack.addEventListener('click', backToMenu);
+    }
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', resizeCanvas);
   }
@@ -518,6 +624,19 @@
     elements.modeSnowBtn = $('btn-mode-snow');
     elements.modeRiverBtn = $('btn-mode-river');
     elements.modeMineBtn = $('btn-mode-mine');
+
+    // 胜负结果卡
+    elements.victory = $('victory');
+    elements.victoryTitle = $('victory-title');
+    elements.victorySub = $('victory-sub');
+    elements.victoryAgain = $('btn-again');
+    elements.victoryBack = $('btn-victory-back');
+
+    if (elements.victory) elements.victory.hidden = true;
+
+    // 系统开启「减少动态效果」时不再连续重绘，只按事件重画
+    reducedMotion = !!(window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
     // 启动时停在开始界面：先看到菜单，不自动开局
     state = T.createGameState(T.DEFAULT_SIZE);

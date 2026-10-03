@@ -6,50 +6,52 @@
 ## 索引（已完工且无后续影响，压缩为一行）
 
 - 首次～第二次协作：初始化 git 仓库 + 五子棋原型 `ice-gomoku/`。其架构约定已被后续各次沿用并细化，全部并入下方「长期有效」章节。
+- 第五次协作：比分只在 `backToMenu()` 里清零并同步 HUD；「重开」保留比分（返回菜单才是结束本轮）。
 
 ## 长期有效的约定与环境事项
 
 - 环境坑（照做即可）：`五子奇境` 目录属主是 `BUILTIN\Administrators`（父目录与 `.git` 均为 Asus），git 报 dubious ownership。因 git 读仓库本地配置在属主校验**之后**，`safe.directory` 写 `.git/config` **无效**，已写入全局 `C:\Users\Asus\.gitconfig`。系统 PATH 无 git，只能用 GitHub Desktop 自带 git；本机 `HOME` 未设置，需显式 `$env:HOME = "C:\Users\Asus"` 才读得到全局配置（身份已配在其中）。
 - 技术栈：纯静态 HTML + CSS + JS，无构建、无第三方库、无 ES Module，双击 `index.html` 即运行。未配置 remote（只做本地提交）。
 - 架构总纲：普通 `<script src>` 按序加载，各文件 IIFE 挂 `window.Gomoku`。`cells` 只存 `0|1|2`，**所有场地状态一律走 `state.arenaState`**。无事件总线、无插件系统。`advanceTurn(state)` 是场地事件的唯一挂载点。HUD 手数用 `Board.countStones(state)` 统计（胜负已分时不走 advanceTurn，用 moveCount 会少算制胜那一手）。
-- 场地模块一律「**规则与渲染分离**」：`src/core/X.js` 只管数据与结算，`src/render/arena.js` 只管画。`core/rules.js`（五连判定）始终不动。
-- 当前 script 顺序（10 个）：`types → board → arena → river → mine → rules → mode → render/board → render/arena → main`。
-- 当前渲染流程（6 步，写在 `main.js` 的 `render()`）：`drawScene`(洞穴背景) → `drawBoard` → `drawArena`(场地，棋子之下) → `drawPieces` → `drawMinePreview`(雷区悬停预览) → `drawArenaOverlay`(冰块/水波/水位条/雷区数字，**棋子之上**)。冰块与倒计时数字必须压在棋子上方，故有 overlay 这一层。
-- 模式框架：`core/mode.js` 是**一张表** `Gomoku.Modes`（`classic.arena=null`、`snow/river/mine.arena='snow'|'river'|'mine'`）+ `Modes.get(id)` 容错回退。`index.html` 用两块 `<div class="screen">`（`#menu`/`#game`）+ HTML `hidden` 属性切换；`main.js` 顶层 `appState = { screen, mode }`，配套 `isPlaying()`/`enterMode()`/`backToMenu()`。**未做插件系统/注册表/路由**。
+- 场地模块一律「**规则与渲染分离**」：`src/core/X.js` 只管数据与结算，`src/render/*.js` 只管画。`core/rules.js`（五连判定）始终不动。
+- 当前 script 顺序（11 个）：`types → board → arena → river → mine → rules → mode → art → render/board → render/arena → main`。`src/render/art.js` 是渲染层公共绘制工具（纯函数、几何口径、离屏贴图工厂），必须在两个 render 模块**之前**加载。
+- 当前渲染流程（7 步，写在 `main.js` 的 `render()`）：`drawScene`(洞穴背景) → `drawBoard`(冰川石板+格线+星位) → `drawArena`(场地，棋子之下) → `drawPieces`(棋子) → `drawMinePreview`(雷区悬停范围) → `drawArenaOverlay`(冰块/水波/水位条/雷区数字，**棋子之上**) → `drawAtmosphere`(冷光/边缘霜花/前景雪/暗角/胜利聚焦，最上层)。冰块与数字必须压在棋子上方，故有 overlay 这一层。
+- 棋盘几何：`main.js` 的 `MARGIN_RATIO=0.085`（夹 18..56）给出「石板外留白」＝可见的洞穴岩壁；「石板矩形」由 `Art.boardRectOf` 统一给出（网格外沿再多半格），两侧共用同一口径；石板上下两色只认 `render/board.js` 的 `boardTopRgb/boardBottomRgb`（river 淡出直接引用，别再各写一份色值）。
+- 渲染循环：对局中由 rAF **连续**驱动（帧末自续），退回菜单后 `isPlaying()` 为假、循环自然停住；reduce-motion 时不连续重绘。因此**任何每帧写 DOM 的代码都必须节流**（见 `main.js` 的 `hudCache`）。石板与边缘霜层烘焙成离屏贴图、棋子渐变按 (玩家,半径) 缓存——**都别在每帧里新建**。
+- 模式框架：`core/mode.js` 是**一张表** `Gomoku.Modes`（`classic.arena=null`、`snow/river/mine.arena='snow'|'river'|'mine'`）+ `Modes.get(id)` 容错回退。`index.html` 用两块 `<div class="screen">`（`#menu`/`#game`）+ HTML `hidden` 属性切换（**必须**有 `[hidden]{display:none!important}` 兜底，否则 `display:flex` 会把它盖掉）；`main.js` 顶层 `appState = { screen, mode }`，配套 `isPlaying()`/`enterMode()`/`backToMenu()`。**未做插件系统/注册表/路由**。
 - 屏幕守卫：`render()`、`scheduleRender()`、`resizeCanvas()`、`ghostFromHover()`、`onKeyDown()` 在非 game 屏幕下提前返回。原因：菜单里画布是 `hidden`，`getBoundingClientRect()` 会全 0 导致尺寸/命中算错，且 `rAF` 动画不该空转。
 - 每回合结算顺序**各模式不同**，务必照各自的规格：snow = 场地结算→`moveCount++`→换手；river / mine = `moveCount++`→场地结算→换手（后两者依赖自增后的 moveCount）。成五一律优先，立即判胜且**不进入** `advanceTurn`。
-- 校验惯例：每次改动都用 Node 临时脚本（跑完即删）在模拟 DOM 里端到端验证，并回归前几个里程碑。**所有视觉效果均未在真实浏览器确认过，一律待用户人工验收。**
+- 校验惯例：每次改动都用 Node 临时脚本（跑完即删）在模拟 DOM 里端到端验证，并回归前几个里程碑。**本次起还能真看画面**：无头 Chrome 截图（`--headless=new --virtual-time-budget=2500 --screenshot=...`，需放宽沙箱）+ 临时 `_crop.js` 裁剪放大；注意无头下 rAF 实测只跑 3 帧、时钟仅推进 33ms，截图里的雪花/水波是**冻结帧**，属正常现象。所有视觉效果仍需用户人工验收。
 
 ## 2026-10-03 第三次协作：雪山洞穴（冰锥 + 冰块）—— 已完工
 
-- `src/core/arena.js`：`create` 补满 5 个预警；`settleTurns` 按「冰锥落下 → 冰块融化 → 补充预警」结算。`Board.isLegal(board, arenaState, x, y)`：冰块格不可落子、预警格可落子；`Board.place` 刻意**不**查冰块以保持解耦。
+- `settleTurns` 按「冰锥落下 → 冰块融化 → 补充预警」结算；`Board.isLegal`：冰块格不可落子、预警格可落子，`Board.place` 刻意**不**查冰块以保持解耦。
 - 坑（重要）：冰锥先落下生成冰块（=2），紧随的融化会把它扣成 1，**「持续 2 回合」实际只持续 1 回合**。修法：结算前先记下已存在的冰块 key，融化只结算这批。连带结论：冰块峰值上限是 `2×5=10`。
-- 视觉：洞穴岩壁 + 飘雪 + 冰川棋盘；预警为向下蓝三角（有子时挪到右上角）；冰块为半透明圆角矩形 + 剩余回合小点。
-
-## 2026-10-03 第五次协作：比分在返回菜单后清零 —— 已完工
-
-- 只在 `backToMenu()` 里清零 `score` 并同步 HUD。**「重开」不动比分**（重开是继续这盘，返回菜单是结束本轮）。`backToMenu` 是回菜单的唯一入口（按钮与 `Esc` 都走它），清零放这里即覆盖所有路径。
 
 ## 2026-10-03 第六次协作：山谷溪流（水位 + 冲走）—— 已完工
 
-- `src/core/river.js`：河流为纵向列，初始 `[6,7]`，水位 ≥30 加 `[5,8]`，≥60 加 `[4,9]`；**扩展永久不缩回**。冲走概率 = `waterLevel × 位置系数 / 100`，系数河心 1.0 / 次外圈 0.7 / 最外圈 0.4。水位条画在棋盘下方 margin，**不挤压棋盘**。新增 `notifyWashed` → 水波。
+- `src/core/river.js`：河流为纵向列，初始 `[6,7]`，水位 ≥30 加 `[5,8]`，≥60 加 `[4,9]`；**扩展永久不缩回**。冲走概率 = `水位 × 位置系数`，系数河心 1.0 / 次外圈 0.7 / 最外圈 0.4。水位条画在石板下方边框里，不挤压棋盘。
 - 坑（重要）：水位公式 `min(80, max(0,(moveCount-7)*2))` 里的 `moveCount` 必须用**自增后**的值，否则第 8 回合算出 0 而非 2。实测节点：8→2、22→30、37→60、47→80。
-- 真 bug：`types.js` 的 `waterLevelAt`/`riverFactorOf` 误用不存在的模块级变量名（应为 `Types.xxx`），**首次调用就抛 ReferenceError**。
 - `board.js` 新增 `removeStone`，供各场地复用（冰锥砸毁/河水冲走/雷区爆炸）。
-
-## 2026-10-03 第七次协作：修河流纵向截断 + 两处几何初始化 —— 已完工
-
-- 需求：河流上下比棋盘短。原因：河道原先按 `clipBoard` 裁到**网格矩形**（首行到末行），而棋盘面是整块 640×640，上下各露约 34px 留白。修法：河道纵向铺满棋盘面 + 首尾各叠一段**与棋盘面色对齐的淡出渐变**。
-- 同步修掉两处真 bug：① `render/arena.js` 的 `COLORS.boardBottom` 与 `render/board.js` 不一致（`#c2dcef` vs `#bcd8ec`），淡出会露接缝；② 两处 `configure()` 都**没设 `geom.cell`**（只在首次绘制时才算出），导致「configure 后、首次绘制前」`pointToPixel`/`pixelToPoint`/`geometry().cell` 全返回 0，命中判定失效。已让两处 `configure()` 先按默认路数算一次格距。
 
 ## 2026-10-03 第八次协作：危险雷区（倒计时 + 3×3 爆炸 + 连锁）—— 已完工
 
-- `src/core/mine.js`：常量在 `types.js`（初始 5~8 颗、倒计时 5~15、每 5 回合补 1 颗、半径 1）。`settleMines(board, arena, moveCount)` 顺序为「倒计时 -1 → 归零者引爆(含连锁) → 每 5 回合补 1 颗」。主动引爆不在此文件发起，而是落子流程的一环（`playMove` 判五连未胜后调 `detonate`）。
+- `src/core/mine.js`：常量在 `types.js`（初始 5~8 颗、倒计时 5~15、每 5 回合补 1 颗、半径 1）。`settleMines` 顺序为「倒计时 -1 → 归零者引爆(含连锁) → 每 5 回合补 1 颗」；主动引爆是落子流程的一环，不在此文件发起。
 - 坑（重要）：`resolveCountdown` 必须把所有「归零的雷」放进**同一个待引爆队列**统一处理。若逐个种子各自引爆，两个相邻的归零雷会被各炸一遍——同一片格子被炸两次、连锁关系丢失。实测相邻双雷应为**一次**爆炸、合并 12 格。
-- 真 bug：`updateHud` 里 `var arenaKind = mode.arena || ''` 对经典模式得到 `''`，导致四个规则块全部被判为「不匹配」而**全部隐藏**。改为 `mode.arena || mode.id`。教训：`arena` 为 `null` 的模式不能拿它当分类键。
-- 规则面板：`index.html` 用 `.rules` 面板替换了原来的 footer 说明，四个模式各一块 `<ul class="rules-arena" data-role="rules-X">`，按模式互斥显示；含共同的基础规则段。
-- 视觉：雷区为红色虚线圆 + 倒计时数字（白字深描边，保证黑白棋子上都可读；≤3 时闪烁），悬停雷区格会预览 3×3 爆炸范围；爆炸有 260ms 闪光。数字画在 overlay 层（棋子上方）。
+
+## 2026-10-03 第九次协作：美术整体重做（冰川石板 + 洞穴场景 + 氛围层）—— 已完工
+
+- 新增 `src/render/art.js`（渲染层公共绘制工具）；重写 `render/board.js`；扩写 `render/arena.js`（新增 `drawAtmosphere`）；重做 `index.html` 的 CSS 与结构。
+- **真 bug ①**：`scheduleRender` 只在事件里排一帧、无自续帧，雪花/水纹/爆炸余晖/紧迫闪烁全部冻住。改成帧末 `if (!reducedMotion) scheduleRender()` 的连续循环。
+- **真 bug ②**：`drawScene` 的洞穴被 `drawBoardBackground`（铺满整张画布）盖住，从未显示过 → 棋盘改为内缩的**冰川石板**，留白即可见岩壁（水位条改画进底部边框）。
+- **真 bug ③**：`.legend-item{display:flex}` 盖掉 `hidden`，六个图例项永远全显示 → 全局 `[hidden]{display:none!important}` 兜底。
+- **真 bug ④**：`drawMinePreview` 的 `cellBox` 漏传 `state`，悬停雷区时 4 个准星坐标全是 NaN。
+- 性能：石板与霜层烘焙成离屏贴图、棋子渐变按 (玩家,半径) 缓存，仅尺寸/DPR 变化时重建。
+- 表现：棋子「阴影→体积→冷反光→高光→描边」；落子弹入、最后一手呼吸点、五连辉光+沿线星芒+全场压暗再提亮；冰锥=悬空冰锥+旋转落点圈；冰块=刻面/裂纹/融水滴；河流=流动水纹+雨丝+胶囊水位条；雷区=罗盘刻线/声呐环/余烬；氛围层=冷光+霜花+前景雪+暗角。
+- 界面：胜负改页面内结果卡，不再 `window.alert`；`data-mode` 驱动每模式强调色。
+- 校验：Node 端到端 **131 项全过**，断言绘制参数合法（数值有限、半径非负、lineWidth>0、渐变 offset∈[0,1]、颜色串无 NaN）；另用无头 Chrome 截图核对，修掉 3 处只有看图才发现的问题。预览图见 `预览/`。
+- 遗留：`render/arena.js` 已 1300+ 行，下次再加场地建议按「场景/场地」拆；新视觉仍需真机验收。
 
 ## 累计校验记录
 
-各次临时脚本项数：111 / 92 / 18 / 124 / 59 / 172（共 576 项，跑完即删）。统计型验证：冰锥落下 20000 次实测 30.00%；河流三档概率实测 0.40 / 0.28 / 0.16；四模式各 300 回合后 `cells` 仍只含 `0|1|2`。
+各次临时脚本项数：111 / 92 / 18 / 124 / 59 / 172（共 576 项）+ 本次 131 项。统计型验证：冰锥落下 20000 次实测 30.00%；河流三档概率实测 0.40 / 0.28 / 0.16；四模式各 300 回合后 `cells` 仍只含 `0|1|2`。

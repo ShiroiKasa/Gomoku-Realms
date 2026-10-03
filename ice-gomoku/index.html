@@ -6,19 +6,42 @@
   <title>五子奇境 · 雪山洞穴</title>
   <style>
     :root {
-      --bg: #0e1c2b;
-      --bg-2: #050b14;
-      --panel: rgba(180, 225, 255, 0.06);
-      --panel-line: rgba(158, 216, 255, 0.22);
-      --ink: #dcecf8;
-      --ink-dim: #8aa6bd;
+      /* 底色与文字 */
+      --bg-0: #04070e;
+      --bg-1: #0a1524;
+      --bg-2: #050a13;
+      --ink: #e4effb;
+      --ink-dim: #8ea9c2;
+      --ink-faint: rgba(142, 169, 194, 0.62);
+
+      /* 冰与极光 */
       --ice: #6fd3ff;
-      --spike: #4A90D9;
-      --black-stone: #101a24;
-      --white-stone: #f2f7fb;
+      --ice-2: #a5e6ff;
+      --aurora: #7ee6d0;
+      --violet: #9b8cff;
+
+      /* 玻璃面板 */
+      --glass: rgba(150, 205, 255, 0.055);
+      --glass-strong: rgba(150, 205, 255, 0.1);
+      --line: rgba(158, 216, 255, 0.18);
+      --line-strong: rgba(158, 216, 255, 0.38);
+
+      /* 强调色：跟随模式（见下方 [data-mode] 段） */
+      --accent: #7fd4ff;
+      --accent-soft: rgba(127, 212, 255, 0.18);
+      --accent-glow: rgba(127, 212, 255, 0.35);
     }
 
+    /* 每个模式一套强调色，HUD / 按钮 / 面板跟着变 */
+    [data-mode="classic"] { --accent: #8fd8ff; --accent-soft: rgba(143, 216, 255, 0.18); --accent-glow: rgba(143, 216, 255, 0.4); }
+    [data-mode="snow"]    { --accent: #7cc8ff; --accent-soft: rgba(124, 200, 255, 0.18); --accent-glow: rgba(124, 200, 255, 0.45); }
+    [data-mode="river"]   { --accent: #5fd0e8; --accent-soft: rgba(95, 208, 232, 0.18);  --accent-glow: rgba(95, 208, 232, 0.45); }
+    [data-mode="mine"]    { --accent: #ff9d78; --accent-soft: rgba(255, 157, 120, 0.18); --accent-glow: rgba(255, 157, 120, 0.45); }
+
     * { box-sizing: border-box; }
+
+    /* hidden 属性必须真的生效：display:flex 之类的声明会把它盖掉 */
+    [hidden] { display: none !important; }
 
     html, body {
       margin: 0;
@@ -31,19 +54,47 @@
       flex-direction: column;
       align-items: center;
       gap: 18px;
-      padding: 28px 16px 40px;
+      padding: 28px 16px 44px;
       background:
-        radial-gradient(900px 520px at 50% -18%, #24435e 0%, transparent 62%),
-        radial-gradient(700px 420px at 12% 108%, #16324a 0%, transparent 60%),
-        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+        radial-gradient(1000px 620px at 50% -14%, rgba(38, 86, 124, 0.5) 0%, transparent 62%),
+        radial-gradient(780px 520px at 6% 104%, rgba(26, 72, 102, 0.42) 0%, transparent 60%),
+        radial-gradient(700px 460px at 98% 86%, rgba(70, 58, 130, 0.22) 0%, transparent 62%),
+        linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 62%, var(--bg-0) 100%);
       background-attachment: fixed;
       color: var(--ink);
       font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── 屏幕切换：只靠 hidden 属性，不做过渡动画 ───────────── */
+    /* 背景霜痕：极淡的斜纹 + 颗粒，避免大面积纯色发闷 */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(115deg,
+          rgba(255, 255, 255, 0.026) 0 1px, transparent 1px 8px),
+        radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.055) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 78% 66%, rgba(255, 255, 255, 0.045) 0 1px, transparent 1.5px);
+      opacity: 0.75;
+    }
+
+    /* 背景暗角 */
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background: radial-gradient(120% 90% at 50% 40%, transparent 42%, rgba(2, 5, 10, 0.62) 100%);
+    }
+
+    /* ── 屏幕切换：只靠 hidden 属性，进场时补一段淡入 ─────────── */
     .screen {
+      position: relative;
+      z-index: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -52,18 +103,64 @@
     }
 
     .screen[hidden] { display: none; }
+    .screen:not([hidden]) { animation: reveal 0.42s ease-out both; }
+
+    @keyframes reveal {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
 
     /* ── 开始界面 ───────────────────────────────────────── */
     #menu {
+      position: relative;
       justify-content: center;
-      min-height: 78vh;
-      text-align: center;
-      /* 深色底：#1A1A2E，叠一点冷光让它与游戏界面同源 */
+      overflow: hidden;
+      isolation: isolate;
+      min-height: min(88vh, 800px);
+      padding: 52px 26px 34px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
       background:
-        radial-gradient(620px 420px at 50% 8%, rgba(111, 211, 255, 0.10) 0%, transparent 68%),
-        #1A1A2E;
-      border-radius: 18px;
-      padding: 34px 20px;
+        radial-gradient(720px 460px at 50% 2%, rgba(111, 211, 255, 0.12) 0%, transparent 66%),
+        linear-gradient(180deg, rgba(13, 26, 43, 0.92) 0%, rgba(7, 14, 25, 0.95) 100%);
+      box-shadow:
+        0 34px 90px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+
+    /* 缓慢流动的极光 */
+    #menu::before {
+      content: "";
+      position: absolute;
+      inset: -30%;
+      z-index: -1;
+      background:
+        radial-gradient(closest-side, rgba(126, 230, 208, 0.22), transparent 70%) 16% 20% / 58% 52% no-repeat,
+        radial-gradient(closest-side, rgba(155, 140, 255, 0.2), transparent 70%) 84% 16% / 52% 46% no-repeat,
+        radial-gradient(closest-side, rgba(111, 211, 255, 0.22), transparent 70%) 48% 98% / 72% 50% no-repeat;
+      filter: blur(6px);
+      animation: aurora 22s ease-in-out infinite alternate;
+    }
+
+    @keyframes aurora {
+      0% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: 0.82; }
+      50% { transform: translate3d(2%, 2%, 0) scale(1.08); opacity: 1; }
+      100% { transform: translate3d(-1%, 3%, 0) scale(1.03); opacity: 0.88; }
+    }
+
+    /* 四角结霜 */
+    #menu::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(220, 242, 255, 0.16), transparent 32%),
+        radial-gradient(circle at 100% 0%, rgba(220, 242, 255, 0.12), transparent 28%),
+        radial-gradient(circle at 0% 100%, rgba(220, 242, 255, 0.12), transparent 28%),
+        radial-gradient(circle at 100% 100%, rgba(220, 242, 255, 0.16), transparent 32%);
+      mix-blend-mode: screen;
     }
 
     .menu-inner {
@@ -71,94 +168,204 @@
       flex-direction: column;
       align-items: center;
       gap: 14px;
+      width: 100%;
+    }
+
+    .menu-emblem {
+      width: 66px;
+      height: 66px;
+      margin-bottom: 2px;
+      filter: drop-shadow(0 0 18px rgba(111, 211, 255, 0.45));
+      animation: emblemSpin 40s linear infinite;
+    }
+
+    @keyframes emblemSpin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
 
     .menu-title {
       margin: 0;
-      font-size: 42px;
+      font-size: clamp(34px, 7vw, 50px);
       font-weight: 600;
       letter-spacing: 0.3em;
       /* 让字距在视觉上也居中：补偿最后一个字的右边距 */
       text-indent: 0.3em;
-      color: #eaf4ff;
-      text-shadow: 0 0 34px rgba(111, 211, 255, 0.4);
+      background: linear-gradient(180deg, #ffffff 0%, #d3ecff 46%, #7cc5ee 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: titleGlow 7s ease-in-out infinite;
+    }
+
+    @keyframes titleGlow {
+      0%, 100% { filter: drop-shadow(0 0 20px rgba(111, 211, 255, 0.28)); }
+      50% { filter: drop-shadow(0 0 34px rgba(160, 228, 255, 0.5)); }
     }
 
     .menu-sub {
-      margin: 0 0 18px;
-      font-size: 13px;
-      letter-spacing: 0.26em;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 20px;
+      font-size: 12px;
+      letter-spacing: 0.3em;
       color: var(--ink-dim);
     }
+
+    .menu-sub::before,
+    .menu-sub::after {
+      content: "";
+      width: 40px;
+      height: 1px;
+    }
+
+    .menu-sub::before { background: linear-gradient(90deg, transparent, var(--line-strong)); }
+    .menu-sub::after { background: linear-gradient(90deg, var(--line-strong), transparent); }
 
     .menu-modes {
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      width: min(340px, 82vw);
+      gap: 12px;
+      width: min(400px, 88vw);
     }
 
     .mode-btn {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 5px;
-      padding: 16px 20px;
-      border: 1px solid rgba(111, 211, 255, 0.28);
-      border-radius: 14px;
-      background: linear-gradient(180deg, rgba(111, 211, 255, 0.10), rgba(111, 211, 255, 0.03));
+      position: relative;
+      display: grid;
+      grid-template-columns: 44px 1fr auto;
+      align-items: center;
+      gap: 14px;
+      padding: 15px 18px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(150, 205, 255, 0.075), rgba(150, 205, 255, 0.02));
       color: var(--ink);
       font-family: inherit;
       text-align: left;
       cursor: pointer;
-      transition: background 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
+      transition: transform 0.18s cubic-bezier(0.3, 0.9, 0.3, 1), border-color 0.18s ease,
+        background 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    /* 悬停时扫过的一道冷光 */
+    .mode-btn::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -40%;
+      width: 38%;
+      opacity: 0;
+      background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+      transform: skewX(-14deg);
     }
 
     .mode-btn:hover {
-      background: linear-gradient(180deg, rgba(111, 211, 255, 0.22), rgba(111, 211, 255, 0.08));
-      border-color: rgba(111, 211, 255, 0.6);
-      transform: translateY(-1px);
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      background: linear-gradient(180deg, rgba(150, 205, 255, 0.16), rgba(150, 205, 255, 0.05));
+      box-shadow:
+        0 14px 32px rgba(0, 0, 0, 0.38),
+        0 0 28px -8px var(--accent-glow);
+    }
+
+    .mode-btn:hover::after { animation: sheen 0.9s ease-out; }
+
+    @keyframes sheen {
+      from { opacity: 1; left: -45%; }
+      to { opacity: 0; left: 108%; }
     }
 
     .mode-btn:active { transform: translateY(0); }
-    .mode-btn:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+    .mode-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .mode-icon {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--accent-soft);
+      border-radius: 13px;
+      color: var(--accent);
+      background:
+        radial-gradient(circle at 32% 22%, rgba(255, 255, 255, 0.16), transparent 70%),
+        var(--accent-soft);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      transition: box-shadow 0.18s ease;
+    }
+
+    .mode-icon svg { display: block; width: 24px; height: 24px; }
+
+    .mode-btn:hover .mode-icon { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 18px -4px var(--accent-glow); }
+
+    .mode-text {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
 
     .mode-name {
-      font-size: 17px;
+      font-size: 16.5px;
       font-weight: 600;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.1em;
     }
 
     .mode-desc {
       font-size: 12px;
+      line-height: 1.5;
       color: var(--ink-dim);
     }
 
-    .menu-version {
-      margin: 22px 0 0;
-      font-size: 11px;
-      letter-spacing: 0.14em;
-      color: rgba(138, 166, 189, 0.7);
+    .mode-arrow {
+      color: var(--ink-faint);
+      transition: transform 0.18s ease, color 0.18s ease;
     }
 
-    header {
-      text-align: center;
+    .mode-arrow svg { display: block; width: 18px; height: 18px; }
+    .mode-btn:hover .mode-arrow { color: var(--accent); transform: translateX(3px); }
+
+    .menu-version {
+      margin: 26px 0 0;
+      padding: 6px 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      color: var(--ink-faint);
+      background: rgba(255, 255, 255, 0.02);
     }
+
+    /* ── 游戏界面 ───────────────────────────────────────── */
+    header { text-align: center; }
 
     h1 {
       margin: 0;
-      font-size: 22px;
+      font-size: 21px;
       font-weight: 600;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.16em;
+      color: var(--ink);
     }
 
     h1 .sub {
       display: block;
-      margin-top: 6px;
-      font-size: 12px;
+      margin-top: 7px;
+      font-size: 11.5px;
       font-weight: 400;
-      letter-spacing: 0.28em;
+      letter-spacing: 0.3em;
       color: var(--ink-dim);
+    }
+
+    /* 标题下一条渐隐的分隔线 */
+    header::after {
+      content: "";
+      display: block;
+      width: min(320px, 62vw);
+      height: 1px;
+      margin: 14px auto 0;
+      background: linear-gradient(90deg, transparent, var(--line-strong), transparent);
     }
 
     main {
@@ -166,6 +373,7 @@
       flex-direction: column;
       align-items: center;
       gap: 16px;
+      width: 100%;
     }
 
     /* ── 状态栏 ─────────────────────────────────────────── */
@@ -174,56 +382,82 @@
       flex-wrap: wrap;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 9px;
     }
 
     .hud-item {
       display: flex;
       align-items: center;
       gap: 8px;
-      min-width: 118px;
-      padding: 8px 14px;
-      border: 1px solid var(--panel-line);
+      min-width: 114px;
+      padding: 8px 15px;
+      border: 1px solid var(--line);
       border-radius: 999px;
-      background: var(--panel);
-      backdrop-filter: blur(6px);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
+        var(--glass);
+      backdrop-filter: blur(7px);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
       font-size: 13px;
     }
 
     .hud-label {
       color: var(--ink-dim);
-      letter-spacing: 0.06em;
+      font-size: 11.5px;
+      letter-spacing: 0.08em;
     }
 
     .hud-value {
       font-weight: 600;
       font-variant-numeric: tabular-nums;
       color: var(--ink);
+      letter-spacing: 0.02em;
     }
 
     .turn-dot {
+      position: relative;
+      flex: 0 0 auto;
       width: 14px;
       height: 14px;
-      flex: 0 0 auto;
       border-radius: 50%;
-      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+      /* 深色棋子落在深色底上要有亮边，否则看不出当前是谁 */
+      box-shadow:
+        inset 0 0 0 1px rgba(205, 234, 255, 0.5),
+        0 0 10px -2px var(--accent-glow);
       transition: background 0.16s ease;
+    }
+
+    /* 轮次指示外圈的呼吸光晕 */
+    .turn-dot::after {
+      content: "";
+      position: absolute;
+      inset: -4px;
+      border: 1px solid var(--accent-soft);
+      border-radius: 50%;
+      animation: turnPulse 2.4s ease-in-out infinite;
+    }
+
+    @keyframes turnPulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.92); }
+      50% { opacity: 0.9; transform: scale(1.06); }
     }
 
     /* ── 棋盘画布 ───────────────────────────────────────── */
     .board-wrap {
       position: relative;
+      overflow: hidden;
       line-height: 0;
-      border-radius: 16px;
-      border: 1px solid var(--panel-line);
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      background: #04070e;
       box-shadow:
-        0 22px 60px rgba(0, 0, 0, 0.5),
-        0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        0 26px 64px rgba(0, 0, 0, 0.55),
+        0 0 60px -22px var(--accent-glow),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     }
 
     canvas#board {
       display: block;
-      border-radius: 15px;
       touch-action: none;
       cursor: crosshair;
     }
@@ -240,74 +474,208 @@
     }
 
     button {
+      position: relative;
+      overflow: hidden;
       padding: 9px 22px;
-      border: 1px solid rgba(111, 211, 255, 0.42);
-      border-radius: 10px;
-      background: linear-gradient(180deg, rgba(111, 211, 255, 0.2), rgba(111, 211, 255, 0.08));
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: linear-gradient(180deg, rgba(150, 205, 255, 0.18), rgba(150, 205, 255, 0.06));
       color: var(--ink);
       font-family: inherit;
       font-size: 14px;
       letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.16s ease, opacity 0.16s ease, transform 0.08s ease;
+      transition: background 0.16s ease, border-color 0.16s ease, transform 0.08s ease, box-shadow 0.16s ease;
     }
 
-    button:hover { background: rgba(111, 211, 255, 0.3); }
+    button:hover {
+      border-color: var(--accent);
+      background: linear-gradient(180deg, var(--accent-soft), rgba(150, 205, 255, 0.05));
+      box-shadow: 0 8px 22px -8px var(--accent-glow);
+    }
+
     button:active { transform: translateY(1px); }
-    button:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     /* 次要按钮：返回菜单 */
     button.btn-ghost {
-      border-color: rgba(158, 216, 255, 0.22);
+      border-color: var(--line);
       background: transparent;
       color: var(--ink-dim);
       letter-spacing: 0.06em;
     }
 
     button.btn-ghost:hover {
-      background: rgba(158, 216, 255, 0.1);
+      background: var(--glass-strong);
       color: var(--ink);
+      box-shadow: none;
+    }
+
+    /* 主按钮：再来一局 */
+    button.btn-primary {
+      border-color: transparent;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(6, 24, 38, 0.28)),
+        var(--accent);
+      color: #05131d;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      box-shadow: 0 12px 30px -12px var(--accent-glow);
+    }
+
+    button.btn-primary:hover {
+      filter: brightness(1.08);
+      box-shadow: 0 16px 34px -12px var(--accent-glow);
+    }
+
+    .hint {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      font-size: 11.5px;
+      color: var(--ink-faint);
+      letter-spacing: 0.06em;
+    }
+
+    .hint kbd {
+      padding: 1px 6px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.03);
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--ink-dim);
+    }
+
+    /* ── 图例 ───────────────────────────────────────────── */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 9px;
+      max-width: 700px;
+    }
+
+    .legend[hidden] { display: none; }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--glass);
+      font-size: 11.5px;
+      color: var(--ink-dim);
+    }
+
+    .legend-icon {
+      flex: 0 0 auto;
+      width: 14px;
+      height: 14px;
+    }
+
+    /* 与画布上的冰锥一致：向下收尖的冰锥 */
+    .legend-icon[data-icon="spike"] {
+      background: linear-gradient(180deg, #9fd6f7, #4A90D9);
+      clip-path: polygon(24% 0, 76% 0, 50% 100%);
+    }
+
+    /* 与画布上的冰块一致：半透明浅蓝圆角方块 */
+    .legend-icon[data-icon="ice"] {
+      border: 1px solid #8CC8E8;
+      border-radius: 3px;
+      background: linear-gradient(135deg, rgba(232, 248, 255, 0.85), rgba(120, 180, 226, 0.7));
+    }
+
+    /* 河流：偏深的蓝 */
+    .legend-icon[data-icon="water"] {
+      border: 1px solid #7ec8f0;
+      border-radius: 3px;
+      background: linear-gradient(180deg, rgba(104, 186, 234, 0.75), rgba(46, 112, 182, 0.75));
+    }
+
+    /* 河心：最危险，用警示橙 */
+    .legend-icon[data-icon="heart"] {
+      border: 1px solid #f0a24a;
+      border-radius: 3px;
+      background: rgba(240, 162, 74, 0.55);
+    }
+
+    /* 雷区：红色虚线圆，与画布上的标记一致 */
+    .legend-icon[data-icon="mine"] {
+      border: 1px dashed #E0645F;
+      border-radius: 50%;
+      background: rgba(201, 48, 44, 0.32);
+    }
+
+    /* 爆炸：实心红点 */
+    .legend-icon[data-icon="blast"] {
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffe6c8, #e8543f);
+      box-shadow: 0 0 10px -1px rgba(232, 84, 63, 0.7);
     }
 
     /* ── 规则面板 ───────────────────────────────────────── */
     .rules {
+      position: relative;
       width: 100%;
-      max-width: 660px;
-      padding: 16px 20px;
-      border: 1px solid var(--panel-line);
-      border-radius: 14px;
-      background: var(--panel);
+      max-width: 680px;
+      padding: 18px 22px 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
+        var(--glass);
       text-align: left;
       font-size: 12.5px;
       line-height: 1.85;
       color: var(--ink-dim);
     }
 
+    /* 顶部的模式强调线 */
+    .rules::before {
+      content: "";
+      position: absolute;
+      top: -1px;
+      left: 22px;
+      right: 22px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.7;
+    }
+
     .rules[hidden] { display: none; }
 
     .rules h2 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       margin: 0 0 10px;
       font-size: 13px;
       font-weight: 600;
       letter-spacing: 0.2em;
-      color: var(--ice);
+      color: var(--accent);
     }
 
     .rules h2 .rules-mode {
-      margin-left: 10px;
-      padding: 2px 10px;
-      border: 1px solid rgba(111, 211, 255, 0.35);
+      padding: 2px 11px;
+      border: 1px solid var(--accent-soft);
       border-radius: 999px;
       font-size: 11.5px;
+      font-weight: 400;
       letter-spacing: 0.1em;
       color: var(--ink);
+      background: var(--accent-soft);
     }
 
     /* 基础规则（各模式通用） */
     .rules-base {
       margin: 0 0 12px;
       padding-bottom: 10px;
-      border-bottom: 1px solid rgba(158, 216, 255, 0.14);
+      border-bottom: 1px solid var(--line);
       color: var(--ink-dim);
     }
 
@@ -323,19 +691,20 @@
     .rules-arena li {
       position: relative;
       margin: 0 0 6px;
-      padding-left: 16px;
+      padding-left: 17px;
     }
 
     .rules-arena li::before {
       content: "";
       position: absolute;
+      top: 0.76em;
       left: 2px;
-      top: 0.72em;
       width: 5px;
       height: 5px;
       border-radius: 50%;
-      background: var(--ice);
-      opacity: 0.6;
+      background: var(--accent);
+      box-shadow: 0 0 8px -1px var(--accent);
+      opacity: 0.75;
     }
 
     .rules-arena li:last-child { margin-bottom: 0; }
@@ -347,75 +716,105 @@
 
     .rules-arena kbd {
       padding: 1px 5px;
-      border: 1px solid rgba(158, 216, 255, 0.3);
+      border: 1px solid var(--line-strong);
       border-radius: 4px;
       font-family: inherit;
       font-size: 11px;
       color: var(--ink);
     }
 
-    /* ── 图例 ───────────────────────────────────────────── */
-    .legend {
+    /* ── 胜负结果卡 ─────────────────────────────────────── */
+    .victory {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
       display: flex;
-      flex-wrap: wrap;
+      align-items: center;
       justify-content: center;
-      gap: 18px;
+      padding: 24px;
+      background: radial-gradient(720px 480px at 50% 42%, rgba(10, 26, 42, 0.7), rgba(2, 6, 12, 0.88));
+      backdrop-filter: blur(7px);
+    }
+
+    .victory[hidden] { display: none; }
+
+    .victory-card {
+      position: relative;
+      width: min(370px, 88vw);
+      padding: 30px 26px 24px;
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      text-align: center;
+      background:
+        radial-gradient(420px 240px at 50% 0%, var(--accent-soft), transparent 70%),
+        linear-gradient(180deg, rgba(19, 38, 59, 0.97), rgba(8, 17, 29, 0.98));
+      box-shadow:
+        0 34px 80px rgba(0, 0, 0, 0.6),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      animation: cardIn 0.44s cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
+    }
+
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.94); }
+      to { opacity: 1; transform: none; }
+    }
+
+    /* 一排五颗棋子：点题 */
+    .victory-stones {
+      display: flex;
+      justify-content: center;
+      gap: 9px;
+      margin-bottom: 18px;
+    }
+
+    .victory-stones i {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 34% 28%, #ffffff, #bcd6e8);
+      box-shadow: 0 0 14px -2px var(--accent-glow);
+      animation: stonePop 1.6s ease-in-out infinite;
+    }
+
+    .victory-stones i:nth-child(2) { animation-delay: 0.12s; }
+    .victory-stones i:nth-child(3) { animation-delay: 0.24s; }
+    .victory-stones i:nth-child(4) { animation-delay: 0.36s; }
+    .victory-stones i:nth-child(5) { animation-delay: 0.48s; }
+
+    @keyframes stonePop {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    .victory-title {
+      margin: 0 0 8px;
+      font-size: 21px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      color: var(--ink);
+    }
+
+    .victory-sub {
+      margin: 0;
       font-size: 12px;
+      letter-spacing: 0.05em;
       color: var(--ink-dim);
     }
 
-    .legend-item {
+    .victory-actions {
       display: flex;
-      align-items: center;
-      gap: 7px;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 22px;
     }
 
-    .legend-icon {
-      width: 14px;
-      height: 14px;
-      flex: 0 0 auto;
-    }
-
-    /* 与画布上的冰锥一致：向下指的蓝色三角 */
-    .legend-icon[data-icon="spike"] {
-      background: var(--spike);
-      opacity: 0.85;
-      clip-path: polygon(0 0, 100% 0, 50% 100%);
-    }
-
-    /* 与画布上的冰块一致：半透明浅蓝圆角方块 */
-    .legend-icon[data-icon="ice"] {
-      border-radius: 3px;
-      background: rgba(150, 210, 255, 0.55);
-      border: 1px solid #8CC8E8;
-    }
-
-    /* 河流：偏深的蓝 */
-    .legend-icon[data-icon="water"] {
-      border-radius: 3px;
-      background: rgba(72, 148, 212, 0.5);
-      border: 1px solid #7ec8f0;
-    }
-
-    /* 河心：最危险，用警示橙 */
-    .legend-icon[data-icon="heart"] {
-      border-radius: 3px;
-      background: rgba(240, 162, 74, 0.55);
-      border: 1px solid #f0a24a;
-    }
-
-    /* 雷区：红色虚线圆，与画布上的标记一致 */
-    .legend-icon[data-icon="mine"] {
-      border-radius: 50%;
-      background: rgba(201, 48, 44, 0.3);
-      border: 1px dashed #D9534F;
-      box-sizing: border-box;
-    }
-
-    /* 爆炸：实心红点 */
-    .legend-icon[data-icon="blast"] {
-      border-radius: 50%;
-      background: rgba(217, 83, 79, 0.85);
+    /* ── 无障碍：跟随系统「减少动态效果」────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
     }
   </style>
 </head>
@@ -423,37 +822,94 @@
   <!-- ══ 开始界面 ══════════════════════════════════════════ -->
   <div id="menu" class="screen">
     <div class="menu-inner">
+      <svg class="menu-emblem" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="emblemIce" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#eafaff"/>
+            <stop offset="1" stop-color="#6fd3ff"/>
+          </linearGradient>
+        </defs>
+        <path d="M32 3 55 16.5v31L32 61 9 47.5v-31z" stroke="url(#emblemIce)" stroke-width="1.6" opacity=".9"/>
+        <path d="M32 3v58M9 16.5 32 30l23-13.5M9 47.5 32 34l23 13.5" stroke="url(#emblemIce)" stroke-width="1" opacity=".5"/>
+        <circle cx="32" cy="32" r="3.4" fill="url(#emblemIce)"/>
+      </svg>
+
       <h1 class="menu-title">五子奇境</h1>
       <p class="menu-sub">五子棋 × 场地事件</p>
 
       <div class="menu-modes">
-        <button type="button" class="mode-btn" data-role="btn-mode-classic">
-          <span class="mode-name">经典五子棋</span>
-          <span class="mode-desc">纯五子棋，无障碍对决</span>
+        <button type="button" class="mode-btn" data-mode="classic" data-role="btn-mode-classic">
+          <span class="mode-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="9.2" cy="14.6" r="5.4" fill="currentColor" opacity=".85"/>
+              <circle cx="14.8" cy="9.4" r="5.4" stroke="currentColor" stroke-width="1.6"/>
+            </svg>
+          </span>
+          <span class="mode-text">
+            <span class="mode-name">经典五子棋</span>
+            <span class="mode-desc">纯五子棋，无障碍对决</span>
+          </span>
+          <span class="mode-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
         </button>
 
-        <button type="button" class="mode-btn" data-role="btn-mode-snow">
-          <span class="mode-name">雪山洞穴</span>
-          <span class="mode-desc">冰锥预警与冰块，落子需权衡</span>
+        <button type="button" class="mode-btn" data-mode="snow" data-role="btn-mode-snow">
+          <span class="mode-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 2.6v18.8M4.1 7.2l15.8 9.6M19.9 7.2 4.1 16.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="12" cy="12" r="2.1" fill="currentColor"/>
+            </svg>
+          </span>
+          <span class="mode-text">
+            <span class="mode-name">雪山洞穴</span>
+            <span class="mode-desc">冰锥预警与冰块，落子需权衡</span>
+          </span>
+          <span class="mode-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
         </button>
 
-        <button type="button" class="mode-btn" data-role="btn-mode-river">
-          <span class="mode-name">山谷溪流</span>
-          <span class="mode-desc">水位上涨，河中棋子会被冲走</span>
+        <button type="button" class="mode-btn" data-mode="river" data-role="btn-mode-river">
+          <span class="mode-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M2.8 8.6c2.6-3 5.2 3 7.8 0s5.2 3 7.8 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              <path d="M2.8 15.6c2.6-3 5.2 3 7.8 0s5.2 3 7.8 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".55"/>
+            </svg>
+          </span>
+          <span class="mode-text">
+            <span class="mode-name">山谷溪流</span>
+            <span class="mode-desc">水位上涨，河中棋子会被冲走</span>
+          </span>
+          <span class="mode-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
         </button>
 
-        <button type="button" class="mode-btn" data-role="btn-mode-mine">
-          <span class="mode-name">危险雷区</span>
-          <span class="mode-desc">倒计时地雷，可主动引爆换取清场</span>
+        <button type="button" class="mode-btn" data-mode="mine" data-role="btn-mode-mine">
+          <span class="mode-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="13.4" r="5.2" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.6 2.8"/>
+              <circle cx="12" cy="13.4" r="2" fill="currentColor"/>
+              <path d="M12 2.6v3.2M5.4 5.8 7.7 8.1M18.6 5.8l-2.3 2.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span class="mode-text">
+            <span class="mode-name">危险雷区</span>
+            <span class="mode-desc">倒计时地雷，可主动引爆换取清场</span>
+          </span>
+          <span class="mode-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
         </button>
       </div>
 
-      <p class="menu-version">v0.5 · 本地原型 · 无外部依赖</p>
+      <p class="menu-version">v0.6 · 本地原型 · 无外部依赖</p>
     </div>
   </div>
 
   <!-- ══ 游戏界面 ══════════════════════════════════════════ -->
-  <div id="game" class="screen" hidden>
+  <div id="game" class="screen" data-mode="classic" hidden>
     <header>
       <h1>五子奇境<span class="sub">五子棋 × 场地事件</span></h1>
     </header>
@@ -492,6 +948,8 @@
         <button type="button" class="btn-ghost" data-role="btn-back">返回菜单</button>
       </section>
 
+      <p class="hint"><kbd>R</kbd> 重开 <kbd>Esc</kbd> 返回菜单</p>
+
       <section class="legend" data-role="legend" hidden>
         <span class="legend-item" data-role="legend-snow">
           <span class="legend-icon" data-icon="spike"></span>冰锥预警（落下时砸毁该格棋子）
@@ -526,7 +984,7 @@
         </ul>
 
         <ul class="rules-arena" data-role="rules-snow" hidden>
-          <li>棋盘上始终维持 <b>5 个冰锥预警</b>（蓝色三角），位置可见，但落下时机不可知。</li>
+          <li>棋盘上始终维持 <b>5 个冰锥预警</b>（蓝色冰锥），位置可见，但落下时机不可知。</li>
           <li>每回合结束，每个预警<b>独立</b>以 <b>30%</b> 概率落下；落下即砸毁该格棋子并生成冰块。</li>
           <li>冰块持续 <b>2 回合</b>后融化；冰块格<b>不可落子</b>。</li>
           <li><b>预警格可以落子</b>——但要承担被砸的风险，这正是本模式的博弈核心。</li>
@@ -556,6 +1014,21 @@
     </main>
   </div>
 
+  <!-- ══ 胜负结果卡（取代 window.alert）════════════════════ -->
+  <div id="victory" class="victory" data-role="victory" hidden>
+    <div class="victory-card" role="dialog" aria-modal="true" aria-labelledby="victory-title">
+      <div class="victory-stones" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <h2 class="victory-title" id="victory-title" data-role="victory-title">黑棋连成五子</h2>
+      <p class="victory-sub" data-role="victory-sub">本局共 0 手</p>
+      <div class="victory-actions">
+        <button type="button" class="btn-primary" data-role="btn-again">再来一局</button>
+        <button type="button" class="btn-ghost" data-role="btn-victory-back">返回菜单</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 普通 script 标签按依赖顺序加载（不使用 ES Module） -->
   <script src="src/core/types.js"></script>
   <script src="src/core/board.js"></script>
@@ -564,6 +1037,7 @@
   <script src="src/core/mine.js"></script>
   <script src="src/core/rules.js"></script>
   <script src="src/core/mode.js"></script>
+  <script src="src/render/art.js"></script>
   <script src="src/render/board.js"></script>
   <script src="src/render/arena.js"></script>
   <script src="src/main.js"></script>

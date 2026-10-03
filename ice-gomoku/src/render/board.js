@@ -1,13 +1,23 @@
 /**
- * 五子奇境 · 棋盘与棋子绘制
+ * 五子奇境 · 冰川石板与棋子绘制
  *
- * 渲染分三层，顺序固定（由 main.js 依次调用）：
- *   1. Render.Board.drawBoard  —— 底色与格子线
- *   2. Render.Arena.drawArena  —— 场地覆盖物（见 render/arena.js）
- *   3. Render.Board.drawPieces —— 棋子
+ * 渲染分七层，顺序固定（由 main.js 的 render() 依次调用）：
+ *   1. Render.Arena.drawScene       —— 洞穴背景（见 render/arena.js）
+ *   2. Render.Board.drawBoard       —— 冰川石板（缓存贴图）、格子线、星位
+ *   3. Render.Arena.drawArena       —— 场地覆盖物（棋子之下）
+ *   4. Render.Board.drawPieces      —— 棋子
+ *   5. Render.Arena.drawMinePreview —— 雷区悬停预览
+ *   6. Render.Arena.drawArenaOverlay—— 冰块 / 水波 / 水位条 / 雷区数字（棋子之上）
+ *   7. Render.Arena.drawAtmosphere  —— 光线、边缘霜花、前景雪、暗角、胜利聚焦
  *
  * 坐标系：逻辑坐标以 CSS 像素为单位，原点在画布左上角。
  * 画布已按 devicePixelRatio 缩放，因此绘制时无需再关心物理像素。
+ *
+ * 美术约定：
+ *  - 「石板」= 棋盘可见表面，其矩形由 Art.boardRectOf 统一给出（与 arena 共用一个口径）；
+ *    石板本体（渐变 + 冰纹 + 霜花 + 颗粒 + 倒角）只在尺寸变化时生成一次，缓存成离屏贴图；
+ *  - 石板的上下两色 boardTop / boardBottom 必须与 arena 河流淡出的两端一致，
+ *    因此这里同时导出 RGB 三元组，arena 直接引用，杜绝两处色值写歪。
  */
 (function () {
   'use strict';
@@ -15,41 +25,95 @@
   var G = window.Gomoku || (window.Gomoku = {});
   var T = G.Types;
   var B = G.Board;
+  var Art = G.Render.Art;
 
   // 几何参数由 configure() 写入，绘制函数只读
   var geom = {
     size: 0,        // 棋盘宽高（CSS 像素）
-    margin: 0,      // 棋盘外留白
+    margin: 0,      // 石板外留白（= 洞穴岩壁边框宽度）
     origin: 0,      // 第一条线的坐标
-    cell: 0         // 相邻两条线的间距
+    cell: 0,        // 相邻两条线的间距
+    dpr: 1          // 设备像素比，用于生成清晰的缓存贴图
   };
 
-  // 冰川色系（与雪山洞穴场地一致）
+  // 冰川色系
   var COLORS = {
-    boardTop: '#eef7fd',
-    boardBottom: '#bcd8ec',
-    gridLine: 'rgba(34, 74, 106, 0.55)',
-    gridEdge: 'rgba(28, 60, 88, 0.72)',
-    starPoint: 'rgba(34, 74, 106, 0.72)',
-    blackFill: '#101a24',
-    blackHighlight: 'rgba(255, 255, 255, 0.34)',
-    blackEdge: 'rgba(0, 0, 0, 0.85)',
-    whiteFill: '#f4f8fc',
-    whiteHighlight: 'rgba(255, 255, 255, 0.95)',
-    whiteEdge: 'rgba(146, 172, 192, 0.9)',
-    shadow: 'rgba(6, 16, 26, 0.38)',
-    winLine: '#ff8a4c',
-    winLineGlow: 'rgba(255, 138, 76, 0.34)'
+    boardTop: '#f1f9fe',
+    boardTopRgb: [241, 249, 254],
+    boardMid: '#dcebf7',
+    boardBottom: '#b7d6ec',
+    boardBottomRgb: [183, 214, 236],
+
+    gridLine: 'rgba(30, 68, 98, 0.40)',
+    gridHighlight: 'rgba(255, 255, 255, 0.5)',
+    gridEdge: 'rgba(24, 56, 84, 0.55)',
+    starPoint: 'rgba(32, 74, 106, 0.68)',
+    starSpark: 'rgba(255, 255, 255, 0.85)',
+
+    blackFill: '#0c141d',
+    blackHighlight: '#42586e',
+    blackRim: 'rgba(122, 198, 240, 0.5)',
+    blackEdge: 'rgba(3, 8, 14, 0.9)',
+
+    whiteFill: '#e9f2f9',
+    whiteHighlight: '#ffffff',
+    whiteRim: 'rgba(146, 186, 216, 0.42)',
+    whiteEdge: 'rgba(126, 158, 184, 0.78)',
+
+    stoneShadow: 'rgba(5, 11, 18, 0.5)',
+    stoneSpecular: 'rgba(255, 255, 255, 0.9)',
+
+    lastMoveBlack: 'rgba(134, 220, 255, 0.95)',
+    lastMoveWhite: 'rgba(22, 78, 112, 0.9)',
+
+    winLine: '#ffb066',
+    winLineCore: '#fff3e0',
+    winLineGlow: 'rgba(255, 150, 70, 0.30)',
+    winVeil: 'rgba(4, 10, 18, 0.34)'
   };
 
-  /** 写入几何参数。size 为画布边长，margin 为棋盘外留白。 */
-  function configure(size, margin) {
+  var POP_MS = 220;         // 落子弹入动画时长
+  var WIN_PULSE_MS = 1600;  // 五连辉光的呼吸周期
+
+  // ── 动画时钟（由 main.js 的主循环推进）──────────────────────────────────
+  var clock = 0;
+  var lastClock = 0;
+  var popStamp = '';        // 已播放过弹入动画的那一手
+  var popAt = -1e9;
+  var winOn = false;
+  var winAt = 0;
+
+  /** 推进本模块的动画时钟。 */
+  function tick(nowMs) {
+    if (lastClock === 0) lastClock = nowMs;
+
+    clock += Math.max(0, nowMs - lastClock);
+    lastClock = nowMs;
+  }
+
+  /** 清空动画痕迹（重开时调用）。 */
+  function resetEffects() {
+    popStamp = '';
+    popAt = -1e9;
+    winOn = false;
+    winAt = 0;
+    lastClock = clock;
+  }
+
+  // ── 几何 ────────────────────────────────────────────────────────────────
+
+  /** 写入几何参数。size 为画布边长，margin 为石板外留白，dpr 为设备像素比。 */
+  function configure(size, margin, dpr) {
     geom.size = size;
     geom.margin = margin;
     geom.origin = margin;
+    geom.dpr = dpr > 0 ? dpr : 1;
+
     // 先按默认路数算一次格距：configure 之后、首次绘制之前也可能被问到
     // 坐标（命中判定就靠 pixelToPoint），此时 geom.cell 不能是 0。
     geom.cell = (size - margin * 2) / (T.DEFAULT_SIZE - 1);
+
+    plate = null;
   }
 
   /** 取当前对局的路数，并据此更新格距。 */
@@ -81,34 +145,291 @@
     return Math.hypot(px - p.px, py - p.py);
   }
 
-  // ── 棋盘底色与格子线 ────────────────────────────────────────────────────
-
-  function drawBoardBackground(ctx) {
-    var grad = ctx.createLinearGradient(0, 0, 0, geom.size);
-    grad.addColorStop(0, COLORS.boardTop);
-    grad.addColorStop(1, COLORS.boardBottom);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, geom.size, geom.size);
+  /** 石板矩形（棋盘可见表面）。arena 也用它裁剪，两边必须同口径。 */
+  function slabRect(state) {
+    return Art.boardRectOf(geom, gridSizeOf(state));
   }
 
+  /** 石板圆角半径。 */
+  function slabRadius() {
+    return Art.slabRadiusOf(geom);
+  }
+
+  // ── 石板贴图（只在尺寸变化时重建）──────────────────────────────────────
+
+  var plate = null;
+
+  /**
+   * 取当前尺寸的石板贴图，必要时重建。
+   * 贴图铺满整张画布：石板之外是透明的（含石板的外发光与落影），
+   * 因此它必须画在洞穴背景之上，透明处自然露出岩壁。
+   */
+  function ensurePlate(state) {
+    var n = gridSizeOf(state);
+    var key = geom.size + '|' + geom.margin + '|' + geom.dpr + '|' + n;
+
+    if (plate && plate.key === key) return plate;
+
+    var rect = Art.boardRectOf(geom, n);
+    var radius = Art.slabRadiusOf(geom);
+    var surface = Art.createSurface(geom.size, geom.size, geom.dpr);
+
+    if (surface) paintPlate(surface.ctx, rect, radius);
+
+    plate = {
+      key: key,
+      rect: rect,
+      radius: radius,
+      surface: surface
+    };
+
+    return plate;
+  }
+
+  /** 冰层纹理：石板里斜向的细长亮纹，像冻结时留下的层理。 */
+  function paintIceStrata(ctx, rect, rng) {
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    for (var i = 0; i < 30; i++) {
+      var x = rect.x + rng() * rect.width;
+      var y = rect.y + rng() * rect.height;
+      var len = rect.width * (0.10 + rng() * 0.42);
+      var ang = (rng() - 0.5) * 0.42;
+
+      ctx.globalAlpha = 0.05 + rng() * 0.11;
+      ctx.strokeStyle = rng() > 0.28 ? '#ffffff' : '#9ec8e6';
+      ctx.lineWidth = 1 + rng() * 2.6;
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /** 石板内缘的霜花：沿四条边向内长出冰晶细枝。 */
+  function paintFrostBorder(ctx, rect, rng) {
+    var unit = Math.max(0.55, geom.cell / 40);
+
+    for (var i = 0; i < 46; i++) {
+      var side = Math.floor(rng() * 4);
+      var t = rng();
+      var depth = 2 + rng() * Math.max(9, geom.cell * 0.55);
+      var x, y, angle;
+
+      if (side === 0) {
+        x = rect.x + t * rect.width;
+        y = rect.y + depth;
+        angle = Math.PI / 2 + (rng() - 0.5) * 1.0;
+      } else if (side === 1) {
+        x = rect.x + rect.width - depth;
+        y = rect.y + t * rect.height;
+        angle = Math.PI + (rng() - 0.5) * 1.0;
+      } else if (side === 2) {
+        x = rect.x + t * rect.width;
+        y = rect.y + rect.height - depth;
+        angle = -Math.PI / 2 + (rng() - 0.5) * 1.0;
+      } else {
+        x = rect.x + depth;
+        y = rect.y + t * rect.height;
+        angle = (rng() - 0.5) * 1.0;
+      }
+
+      Art.frostSprig(
+        ctx, x, y,
+        (7 + rng() * 17) * unit,
+        angle,
+        0.05 + rng() * 0.12,
+        (0.7 + rng() * 0.7) * unit,
+        rng
+      );
+    }
+  }
+
+  /** 冰晶颗粒：细细的亮点与冷色暗点，让平面不平。 */
+  function paintSpeckles(ctx, rect, rng) {
+    for (var i = 0; i < 1100; i++) {
+      var x = rect.x + rng() * rect.width;
+      var y = rect.y + rng() * rect.height;
+      var size = 0.5 + rng() * 1.5;
+
+      ctx.globalAlpha = 0.04 + rng() * 0.12;
+      ctx.fillStyle = rng() > 0.42 ? '#ffffff' : '#6f9fc4';
+      ctx.fillRect(x, y, size, size);
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  /** 石板内缘的厚度感：四边向内渐暗 + 顶部一道亮边。 */
+  function paintInnerShade(ctx, rect) {
+    var d = Math.max(11, geom.cell * 0.44);
+    var w = rect.width;
+    var h = rect.height;
+
+    var top = ctx.createLinearGradient(0, rect.y, 0, rect.y + d);
+    top.addColorStop(0, 'rgba(52, 100, 140, 0.22)');
+    top.addColorStop(1, 'rgba(52, 100, 140, 0)');
+    ctx.fillStyle = top;
+    ctx.fillRect(rect.x, rect.y, w, d);
+
+    var bottom = ctx.createLinearGradient(0, rect.y + h - d, 0, rect.y + h);
+    bottom.addColorStop(0, 'rgba(52, 104, 148, 0)');
+    bottom.addColorStop(1, 'rgba(44, 92, 134, 0.24)');
+    ctx.fillStyle = bottom;
+    ctx.fillRect(rect.x, rect.y + h - d, w, d);
+
+    var left = ctx.createLinearGradient(rect.x, 0, rect.x + d, 0);
+    left.addColorStop(0, 'rgba(52, 100, 140, 0.18)');
+    left.addColorStop(1, 'rgba(52, 100, 140, 0)');
+    ctx.fillStyle = left;
+    ctx.fillRect(rect.x, rect.y, d, h);
+
+    var right = ctx.createLinearGradient(rect.x + w - d, 0, rect.x + w, 0);
+    right.addColorStop(0, 'rgba(52, 100, 140, 0)');
+    right.addColorStop(1, 'rgba(44, 92, 134, 0.2)');
+    ctx.fillStyle = right;
+    ctx.fillRect(rect.x + w - d, rect.y, d, h);
+
+    // 顶部受光的一道亮边
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillRect(rect.x + 1, rect.y + 1, w - 2, 1.2);
+  }
+
+  /** 画石板本体（缓存贴图的绘制内容）。 */
+  function paintPlate(ctx, rect, radius) {
+    var rng = Art.rngFrom(0x5A17B0);
+    var w = rect.width;
+    var h = rect.height;
+
+    // ① 外发光：石板像嵌在发光的冰壁里
+    ctx.save();
+    ctx.shadowColor = 'rgba(118, 198, 244, 0.55)';
+    ctx.shadowBlur = Math.max(10, geom.cell * 0.52);
+    ctx.strokeStyle = 'rgba(180, 228, 255, 0.8)';
+    ctx.lineWidth = 1.6;
+    Art.roundRectPath(ctx, rect.x, rect.y, w, h, radius);
+    ctx.stroke();
+    ctx.restore();
+
+    // ② 落影：四层递扩的圆角矩形伪造柔和的投影
+    for (var s = 4; s >= 1; s--) {
+      var grow = s * Math.max(3, geom.cell * 0.13);
+      ctx.fillStyle = 'rgba(2, 7, 13, ' + (0.05 + 0.028 * (4 - s)).toFixed(3) + ')';
+      Art.roundRectPath(
+        ctx,
+        rect.x - grow * 0.42 + 1,
+        rect.y - grow * 0.42 + grow * 0.95,
+        w + grow * 0.84,
+        h + grow * 0.84,
+        radius + grow * 0.5
+      );
+      ctx.fill();
+    }
+
+    // ③ 石板表面：全部裁剪在圆角内
+    ctx.save();
+    Art.clipRoundRect(ctx, rect.x, rect.y, w, h, radius);
+
+    var base = ctx.createLinearGradient(0, rect.y, 0, rect.y + h);
+    base.addColorStop(0, COLORS.boardTop);
+    base.addColorStop(0.52, COLORS.boardMid);
+    base.addColorStop(1, COLORS.boardBottom);
+    ctx.fillStyle = base;
+    ctx.fillRect(rect.x, rect.y, w, h);
+
+    // 左上大面积柔光 + 右下冷影，撑出体积
+    Art.softEllipse(ctx, rect.x + w * 0.26, rect.y + h * 0.13, w * 0.74, h * 0.56,
+      'rgba(255, 255, 255, 0.5)', 'rgba(255, 255, 255, 0)');
+    Art.softEllipse(ctx, rect.x + w * 0.9, rect.y + h * 0.96, w * 0.64, h * 0.48,
+      'rgba(86, 140, 182, 0.22)', 'rgba(86, 140, 182, 0)');
+
+    paintIceStrata(ctx, rect, rng);
+    paintFrostBorder(ctx, rect, rng);
+    paintSpeckles(ctx, rect, rng);
+    paintInnerShade(ctx, rect);
+
+    ctx.restore();
+
+    // ④ 内圈倒角：左上亮、右下冷，做出石板的厚度
+    var bevel = ctx.createLinearGradient(rect.x, rect.y, rect.x + w, rect.y + h);
+    bevel.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+    bevel.addColorStop(0.45, 'rgba(200, 230, 250, 0.32)');
+    bevel.addColorStop(1, 'rgba(96, 146, 186, 0.55)');
+
+    ctx.strokeStyle = bevel;
+    ctx.lineWidth = 2;
+    Art.roundRectPath(ctx, rect.x + 1, rect.y + 1, w - 2, h - 2, Math.max(2, radius - 1));
+    ctx.stroke();
+
+    // ⑤ 外圈：上缘冰白、下缘蓝灰
+    var rim = ctx.createLinearGradient(rect.x, rect.y, rect.x + w, rect.y + h);
+    rim.addColorStop(0, 'rgba(232, 248, 255, 0.95)');
+    rim.addColorStop(0.5, 'rgba(168, 212, 240, 0.85)');
+    rim.addColorStop(1, 'rgba(104, 158, 202, 0.85)');
+
+    ctx.strokeStyle = rim;
+    ctx.lineWidth = 2.4;
+    Art.roundRectPath(ctx, rect.x, rect.y, w, h, radius);
+    ctx.stroke();
+  }
+
+  /** 没有离屏画布时的退路：直接画一层渐变石板（丢失冰纹细节，但保证能看）。 */
+  function drawPlateFallback(ctx, rect, radius) {
+    var base = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.height);
+    base.addColorStop(0, COLORS.boardTop);
+    base.addColorStop(0.52, COLORS.boardMid);
+    base.addColorStop(1, COLORS.boardBottom);
+
+    ctx.save();
+    ctx.fillStyle = base;
+    Art.roundRectPath(ctx, rect.x, rect.y, rect.width, rect.height, radius);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(210, 238, 255, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── 格子线 ──────────────────────────────────────────────────────────────
+
+  /**
+   * 棋盘线：一条暗刻痕 + 一条偏右下的高光，读起来像冰面被划出的凹槽。
+   * 线宽 1 落在整数坐标上会糊，统一偏移半像素。
+   */
   function drawGrid(ctx, n) {
     var start = geom.origin;
     var end = geom.origin + (n - 1) * geom.cell;
+    var i, pos;
 
     ctx.save();
-    ctx.strokeStyle = COLORS.gridLine;
+    ctx.lineCap = 'butt';
     ctx.lineWidth = 1;
-    ctx.lineCap = 'round';
 
-    // 线宽 1 落在整数坐标上会糊，偏移半像素让线条锐利
     ctx.beginPath();
-    for (var i = 0; i < n; i++) {
-      var pos = Math.round(geom.origin + i * geom.cell) + 0.5;
+    for (i = 0; i < n; i++) {
+      pos = Math.round(geom.origin + i * geom.cell) + 0.5;
       ctx.moveTo(pos, start);
       ctx.lineTo(pos, end);
       ctx.moveTo(start, pos);
       ctx.lineTo(end, pos);
     }
+    ctx.strokeStyle = COLORS.gridLine;
+    ctx.stroke();
+
+    ctx.beginPath();
+    for (i = 0; i < n; i++) {
+      pos = Math.round(geom.origin + i * geom.cell) + 1.5;
+      ctx.moveTo(pos, start);
+      ctx.lineTo(pos, end);
+      ctx.moveTo(start, pos);
+      ctx.lineTo(end, pos);
+    }
+    ctx.strokeStyle = COLORS.gridHighlight;
     ctx.stroke();
 
     // 最外圈加重，棋盘边界更清晰
@@ -118,27 +439,38 @@
     ctx.restore();
   }
 
+  /** 星位：一枚嵌进冰面的小菱形冰晶。 */
   function drawStarPoints(ctx, n) {
     var points = B.starPoints({ size: n });
-    var radius = Math.max(2, geom.cell * 0.09);
+    var r = Math.max(2, geom.cell * 0.085);
 
     ctx.save();
-    ctx.fillStyle = COLORS.starPoint;
     for (var i = 0; i < points.length; i++) {
       var p = pointToPixel(points[i].x, points[i].y);
+
+      Art.starPath(ctx, p.px, p.py, r * 1.7, r * 0.5, 4, Math.PI / 4);
+      ctx.fillStyle = COLORS.starPoint;
+      ctx.fill();
+
       ctx.beginPath();
-      ctx.arc(p.px, p.py, radius, 0, Math.PI * 2);
+      ctx.arc(p.px - r * 0.42, p.py - r * 0.42, Math.max(0.7, r * 0.42), 0, Math.PI * 2);
+      ctx.fillStyle = COLORS.starSpark;
       ctx.fill();
     }
     ctx.restore();
   }
 
-  /** 第一层：棋盘。 */
+  /** 第二层：石板 + 格子线 + 星位。 */
   function drawBoard(ctx, state) {
     var n = gridSizeOf(state);
+    var entry = ensurePlate(state);
 
     ctx.save();
-    drawBoardBackground(ctx);
+
+    if (!entry.surface || !Art.blitSurface(ctx, entry.surface)) {
+      drawPlateFallback(ctx, entry.rect, entry.radius);
+    }
+
     drawGrid(ctx, n);
     drawStarPoints(ctx, n);
     ctx.restore();
@@ -146,107 +478,302 @@
 
   // ── 棋子 ────────────────────────────────────────────────────────────────
 
-  /** 单颗棋子的调色板。 */
-  function paletteFor(player) {
-    if (player === T.BLACK) {
-      return {
-        fill: COLORS.blackFill,
-        highlight: COLORS.blackHighlight,
-        edge: COLORS.blackEdge
-      };
+  /**
+   * 棋子渐变缓存。
+   *
+   * 渐变坐标写在「以棋子中心为原点」的局部空间里：画的时候先 translate 到棋子位置，
+   * 渐变随当前变换矩阵走，因此同一颗半径的所有棋子可以共用同一个渐变对象。
+   * 满盘 225 颗棋子若每帧各建 5 个渐变，光垃圾回收就够呛，这里只建一次。
+   */
+  var gradCache = { owner: null, map: {} };
+
+  function gradientsFor(ctx, radius, player) {
+    if (gradCache.owner !== ctx) {
+      gradCache.owner = ctx;
+      gradCache.map = {};
     }
-    return {
-      fill: COLORS.whiteFill,
-      highlight: COLORS.whiteHighlight,
-      edge: COLORS.whiteEdge
+
+    var key = player + '|' + Math.round(radius * 8);
+    if (gradCache.map[key]) return gradCache.map[key];
+
+    var r = radius;
+    var isBlack = player === T.BLACK;
+    var halo = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 1.14);
+
+    if (isBlack) {
+      halo.addColorStop(0, 'rgba(5, 11, 18, 0.52)');
+      halo.addColorStop(1, 'rgba(5, 11, 18, 0)');
+    } else {
+      halo.addColorStop(0, 'rgba(8, 16, 26, 0.38)');
+      halo.addColorStop(1, 'rgba(8, 16, 26, 0)');
+    }
+
+    var body = ctx.createRadialGradient(
+      -r * 0.36, -r * 0.42, r * 0.10,
+      0, 0, r * 1.06
+    );
+
+    if (isBlack) {
+      body.addColorStop(0, COLORS.blackHighlight);
+      body.addColorStop(0.5, '#1d2b3a');
+      body.addColorStop(1, COLORS.blackFill);
+    } else {
+      body.addColorStop(0, COLORS.whiteHighlight);
+      body.addColorStop(0.58, COLORS.whiteFill);
+      body.addColorStop(1, '#c2d8e9');
+    }
+
+    var rim = ctx.createRadialGradient(0, r * 0.46, r * 0.1, 0, r * 0.46, r * 1.05);
+
+    if (isBlack) {
+      rim.addColorStop(0, COLORS.blackRim);
+      rim.addColorStop(1, 'rgba(122, 198, 240, 0)');
+    } else {
+      rim.addColorStop(0, COLORS.whiteRim);
+      rim.addColorStop(1, 'rgba(146, 186, 216, 0)');
+    }
+
+    var set = {
+      halo: halo,
+      body: body,
+      rim: rim,
+      edge: isBlack ? COLORS.blackEdge : COLORS.whiteEdge,
+      arcHi: isBlack ? 'rgba(196, 232, 255, 0.5)' : 'rgba(255, 255, 255, 0.95)'
     };
+
+    gradCache.map[key] = set;
+    return set;
   }
 
   /**
-   * 画一颗棋子。含投影、径向高光与描边。
+   * 画一颗棋子：接地阴影 → 主体体积 → 下缘环境反光 → 高光 → 描边 → 顶部反光弧。
+   * 高光位置按棋子坐标做确定性微差，避免整盘棋子像同一个模子刻出来的。
+   *
    * @param {boolean} [ghost] 半透明预览（鼠标悬停）
    */
   function drawStone(ctx, px, py, player, ghost) {
-    var radius = geom.cell * T.STONE_RADIUS_RATIO;
-    var colors = paletteFor(player);
+    var r = geom.cell * T.STONE_RADIUS_RATIO;
+    var seed = Art.hash01(Math.round(px * 3.1), Math.round(py * 3.7));
+    var tilt = (seed - 0.5) * 0.85;
+    var g = gradientsFor(ctx, r, player);
 
     ctx.save();
-    ctx.globalAlpha = ghost ? 0.4 : 1;
+    ctx.globalAlpha = ghost ? 0.42 : 1;
+    ctx.translate(px, py);
 
-    // 投影
+    // ① 接地阴影
+    ctx.save();
+    ctx.translate(0, r * 0.26);
+    ctx.scale(1, 0.42);
+    ctx.fillStyle = g.halo;
     ctx.beginPath();
-    ctx.arc(px, py + radius * 0.16, radius, 0, Math.PI * 2);
-    ctx.fillStyle = COLORS.shadow;
+    ctx.arc(0, 0, r * 1.14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ② 主体
+    ctx.fillStyle = g.body;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
 
-    // 主体 + 斜向高光
-    var grad = ctx.createRadialGradient(
-      px - radius * 0.36, py - radius * 0.42, radius * 0.14,
-      px, py, radius * 1.06
-    );
-    grad.addColorStop(0, colors.highlight);
-    grad.addColorStop(1, colors.fill);
+    // ③ 下缘环境反光（冰川冷光打在棋子下沿）：裁进圆内，用缓存渐变填满
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.clip();
 
     ctx.beginPath();
-    ctx.arc(px, py, radius, 0, Math.PI * 2);
-    ctx.fillStyle = grad;
+    ctx.arc(0, r * 0.46, r * 1.05, 0, Math.PI * 2);
+    ctx.fillStyle = g.rim;
     ctx.fill();
+    ctx.restore();
 
-    // 描边：浅色棋在浅色盘面上靠它拉开边界
-    ctx.lineWidth = Math.max(1, radius * 0.07);
-    ctx.strokeStyle = colors.edge;
+    // ④ 高光斑
+    ctx.save();
+    ctx.translate(-r * 0.33 + tilt * r * 0.16, -r * 0.38 + tilt * r * 0.08);
+    ctx.rotate(-0.55 + tilt * 0.6);
+    ctx.scale(1, 0.6);
+    ctx.fillStyle = COLORS.stoneSpecular;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ⑤ 描边：浅色棋在浅色石板上靠它拉开边界
+    ctx.lineWidth = Math.max(1, r * 0.075);
+    ctx.strokeStyle = g.edge;
+    ctx.beginPath();
+    ctx.arc(0, 0, r - ctx.lineWidth * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // ⑥ 顶部反光弧
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.84, Math.PI * 1.14, Math.PI * 1.7);
+    ctx.strokeStyle = g.arcHi;
+    ctx.lineWidth = Math.max(1, r * 0.085);
+    ctx.lineCap = 'round';
     ctx.stroke();
 
     ctx.restore();
   }
 
-  /** 最后一手的落点标记。 */
-  function drawLastMoveMark(ctx, px, py, player) {
-    var radius = geom.cell * T.STONE_RADIUS_RATIO;
+  /**
+   * 最后一手的落点标记：格心一枚对比色小点 + 一圈呼吸光晕。
+   * @param {boolean} [fresh] 是否刚落下（额外来一圈扩散环）
+   */
+  function drawLastMoveMark(ctx, px, py, player, fresh) {
+    var r = geom.cell * T.STONE_RADIUS_RATIO;
+    var breathe = 0.5 + 0.5 * Math.sin((clock % WIN_PULSE_MS) / WIN_PULSE_MS * Math.PI * 2);
+    var color = player === T.BLACK ? COLORS.lastMoveBlack : COLORS.lastMoveWhite;
 
     ctx.save();
+
+    Art.softEllipse(ctx, px, py, r * (0.72 + 0.16 * breathe), r * (0.72 + 0.16 * breathe),
+      player === T.BLACK ? 'rgba(134, 220, 255, 0.28)' : 'rgba(22, 78, 112, 0.24)',
+      'rgba(255, 255, 255, 0)');
+
     ctx.beginPath();
-    ctx.arc(px, py, radius * 0.24, 0, Math.PI * 2);
-    ctx.fillStyle = player === T.BLACK ? '#7fd8ff' : '#1d5a7d';
+    ctx.arc(px, py, r * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
+
+    if (fresh) {
+      var age = clock - popAt;
+      if (age >= 0 && age < POP_MS * 1.5) {
+        var t = age / (POP_MS * 1.5);
+        ctx.globalAlpha = (1 - t) * 0.7;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(1, geom.cell * 0.045 * (1 - t));
+        ctx.beginPath();
+        ctx.arc(px, py, r * (0.55 + 0.7 * t), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     ctx.restore();
   }
 
-  /** 五连高亮：沿连线画一道发光粗线。 */
-  function drawWinningLine(ctx, line) {
+  /** 五连的呼吸辉光：层层加宽的暖色描边 + 沿线跳动的星芒。 */
+  function drawWinningLine(ctx, line, glowOnly) {
     if (!line || line.length < 2) return;
 
     var first = pointToPixel(line[0].x, line[0].y);
     var last = pointToPixel(line[line.length - 1].x, line[line.length - 1].y);
+    var breathe = 0.5 + 0.5 * Math.sin((clock % WIN_PULSE_MS) / WIN_PULSE_MS * Math.PI * 2);
+    var base = geom.cell * T.WIN_LINE_WIDTH_RATIO;
 
     ctx.save();
     ctx.lineCap = 'round';
 
+    // 外圈柔光：用三层递减 alpha 的粗线代替 shadowBlur，省一次昂贵的模糊
+    var layers = [
+      { w: base * 5.2, a: 0.10 + 0.06 * breathe, c: COLORS.winLineGlow },
+      { w: base * 3.0, a: 0.16 + 0.10 * breathe, c: COLORS.winLineGlow },
+      { w: base * 1.9, a: 0.55 + 0.20 * breathe, c: COLORS.winLine }
+    ];
+
+    for (var i = 0; i < layers.length; i++) {
+      ctx.globalAlpha = layers[i].a;
+      ctx.strokeStyle = layers[i].c;
+      ctx.lineWidth = layers[i].w;
+      ctx.beginPath();
+      ctx.moveTo(first.px, first.py);
+      ctx.lineTo(last.px, last.py);
+      ctx.stroke();
+    }
+
+    // 内芯：一条几乎白色的细线，让连线读起来是「发光的」
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = COLORS.winLineCore;
+    ctx.lineWidth = Math.max(1.4, base * 0.6);
     ctx.beginPath();
     ctx.moveTo(first.px, first.py);
     ctx.lineTo(last.px, last.py);
-    ctx.strokeStyle = COLORS.winLineGlow;
-    ctx.lineWidth = geom.cell * T.WIN_LINE_WIDTH_RATIO * 3.2;
     ctx.stroke();
 
-    ctx.beginPath();
-    ctx.moveTo(first.px, first.py);
-    ctx.lineTo(last.px, last.py);
-    ctx.strokeStyle = COLORS.winLine;
-    ctx.lineWidth = geom.cell * T.WIN_LINE_WIDTH_RATIO;
-    ctx.stroke();
+    if (glowOnly) {
+      ctx.restore();
+      return;
+    }
+
+    // 沿线跳动的星芒：每颗棋子一个，相位依次错开
+    var dx = last.px - first.px;
+    var dy = last.py - first.py;
+    var len = Math.hypot(dx, dy) || 1;
+
+    for (var k = 0; k < line.length; k++) {
+      var t = line.length === 1 ? 0.5 : k / (line.length - 1);
+      var phase = ((clock % 900) / 900 + t * 0.5) % 1;
+      var flick = Math.pow(Math.sin(phase * Math.PI), 2);
+      var px = first.px + dx * t;
+      var py = first.py + dy * t;
+      var size = geom.cell * (0.18 + 0.22 * flick);
+
+      ctx.globalAlpha = 0.5 + 0.5 * flick;
+      ctx.fillStyle = '#fff6e6';
+      Art.starPath(ctx, px, py, size, size * 0.26, 4, Math.PI / 4 + (clock % 4000) / 4000);
+      ctx.fill();
+    }
+
+    // 两端各点一颗更大的光点
+    ctx.globalAlpha = 0.55 + 0.35 * breathe;
+    Art.softEllipse(ctx, first.px, first.py, geom.cell * 0.7, geom.cell * 0.7,
+      'rgba(255, 196, 130, 0.7)', 'rgba(255, 196, 130, 0)');
+    Art.softEllipse(ctx, last.px, last.py, geom.cell * 0.7, geom.cell * 0.7,
+      'rgba(255, 196, 130, 0.7)', 'rgba(255, 196, 130, 0)');
 
     ctx.restore();
   }
 
   /**
-   * 第三层：棋子。
+   * 胜利聚焦：整盘压暗，再把五连的辉光重新提到最上层。
+   * 由 render/arena.js 的 drawAtmosphere 在所有内容之上调用（见该文件注释）。
+   */
+  function drawWinSpotlight(ctx, state) {
+    if (!state || !state.winningLine || state.winningLine.length < 2) return;
+
+    ctx.save();
+    ctx.fillStyle = COLORS.winVeil;
+    ctx.fillRect(0, 0, geom.size, geom.size);
+    ctx.restore();
+
+    drawWinningLine(ctx, state.winningLine, true);
+  }
+
+  /**
+   * 第四层：棋子。
+   *
+   * 顺带在这里做两件只跟画面有关的事：
+   *  - 认出「新落的一手」，给它一段弹入动画；
+   *  - 认出「刚成五」，给五连辉光一个起始时刻。
+   *
    * @param {object} state GameState
    * @param {object|null} [ghost] { x, y, player } 鼠标悬停预览
    */
   function drawPieces(ctx, state, ghost) {
     var board = state;
     var n = gridSizeOf(state);
+
+    // 新落一手 / 刚成五：只记时间戳，不改任何游戏数据
+    var stamp = state.lastMove
+      ? T.cellKey(state.lastMove.x, state.lastMove.y) + '#' +
+        (state.history ? state.history.length : 0)
+      : '';
+
+    if (stamp !== popStamp) {
+      popStamp = stamp;
+      if (stamp) popAt = clock;
+    }
+
+    if (state.winningLine && state.winningLine.length >= 2) {
+      if (!winOn) {
+        winOn = true;
+        winAt = clock;
+      }
+    } else {
+      winOn = false;
+    }
 
     ctx.save();
 
@@ -256,23 +783,45 @@
       drawStone(ctx, gp.px, gp.py, ghost.player, true);
     }
 
+    var isLast = state.lastMove && state.winner === T.WINNER_NONE;
+
     for (var y = 0; y < n; y++) {
       for (var x = 0; x < n; x++) {
         var player = B.getCell(board, x, y);
         if (player === T.EMPTY) continue;
 
         var p = pointToPixel(x, y);
+
+        // 弹入动画：以格心为轴放大，从 0.7 收到 1（略微过冲）
+        if (isLast && x === state.lastMove.x && y === state.lastMove.y) {
+          var age = clock - popAt;
+          if (age >= 0 && age < POP_MS) {
+            var t = age / POP_MS;
+            var back = 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+            var scale = 0.7 + 0.3 * back;
+
+            ctx.save();
+            ctx.globalAlpha = 0.55 + 0.45 * Math.min(1, t * 1.6);
+            ctx.translate(p.px, p.py);
+            ctx.scale(scale, scale);
+            ctx.translate(-p.px, -p.py);
+            drawStone(ctx, p.px, p.py, player, false);
+            ctx.restore();
+            continue;
+          }
+        }
+
         drawStone(ctx, p.px, p.py, player, false);
       }
     }
 
-    if (state.lastMove && state.winner === T.WINNER_NONE) {
+    if (isLast) {
       var lp = pointToPixel(state.lastMove.x, state.lastMove.y);
-      drawLastMoveMark(ctx, lp.px, lp.py, state.lastMove.player);
+      drawLastMoveMark(ctx, lp.px, lp.py, state.lastMove.player, true);
     }
 
     if (state.winningLine) {
-      drawWinningLine(ctx, state.winningLine);
+      drawWinningLine(ctx, state.winningLine, false);
     }
 
     ctx.restore();
@@ -284,11 +833,11 @@
       size: geom.size,
       margin: geom.margin,
       origin: geom.origin,
-      cell: geom.cell
+      cell: geom.cell,
+      dpr: geom.dpr
     };
   }
 
-  G.Render = G.Render || {};
   G.Render.Board = {
     COLORS: COLORS,
     configure: configure,
@@ -296,8 +845,13 @@
     pointToPixel: pointToPixel,
     pixelToPoint: pixelToPoint,
     distanceToPoint: distanceToPoint,
+    slabRect: slabRect,
+    slabRadius: slabRadius,
+    tick: tick,
+    resetEffects: resetEffects,
     drawBoard: drawBoard,
     drawPieces: drawPieces,
-    drawStone: drawStone
+    drawStone: drawStone,
+    drawWinSpotlight: drawWinSpotlight
   };
 })();
