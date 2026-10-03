@@ -49,3 +49,12 @@
 - 渲染：`drawArena` 现按场地类型分派（有 `riverColumns` 画河道/危险度/雨丝，有 `spikes` 画冰锥，`arenaState` 为 null 什么都不画）。水位条画在棋盘下方 margin 里，**不挤压棋盘**。新增 `notifyWashed` → 水波动画，与 `notifyDrops` 并列。
 - 顺带修的真 bug：`types.js` 里 `waterLevelAt` / `riverFactorOf` 误用了不存在的模块级变量名（应为 `Types.xxx`），会在**首次调用时就抛 ReferenceError**；另给 `board.js` 加了 `removeStone` 供两个场地复用。
 - 校验：Node 临时脚本 124 项（48 项溪流规则 + 76 项端到端/回归，跑完即删），含 20000 次统计验证三档概率实测 0.40/0.28/0.16。
+
+## 2026-10-03 第七次协作：修河流纵向截断 + 两处几何初始化
+
+- 需求：河流上下比棋盘短，看着别扭。原因：河道原先按 `clipBoard` 裁到**网格矩形**（首行到末行），而棋盘面是整块 640×640，于是上下各露出约 34px 的浅色留白。
+- 修法：河道纵向改为铺满整个棋盘面（`y=0, h=geom.size`），并在首尾各叠一段**与棋盘面色对齐的纵向淡出渐变**，避免出现生硬的横向截断。顺带把雨丝、危险度渐变、水流线都改成同一纵向范围。
+- 连带发现两处**真 bug**（原色值不一致 + 初始化缺失）：
+  1. `render/arena.js` 里 `COLORS.boardBottom` 是 `#c2dcef`，而 `render/board.js` 用的是 `#bcd8ec`——两份棋盘配色不同步，淡出渐变会露出接缝。已统一（淡出必须用棋盘真实面色）。
+  2. `render/board.js` 与 `render/arena.js` 的 `configure()` 都**没设 `geom.cell`**，它只在 `gridSizeOf()` 里赋值、即只在首次绘制时才被算出来。因此「configure 之后、首次绘制之前」若询问坐标，`pointToPixel` / `pixelToPoint` / `geometry().cell` 全部返回 0——命中判定会失效。已让两处 `configure()` 都按默认路数先算一次格距。
+- 校验：Node 临时脚本 2 套共 59 项（30 项几何/回归 + 29 项全里程碑回归，跑完即删），含「两处棋盘面色一致」「场地与棋盘格心坐标一致」这类跨文件一致性断言。

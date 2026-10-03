@@ -47,6 +47,9 @@
     geom.size = size;
     geom.margin = margin;
     geom.origin = margin;
+    // 先按默认路数算一次格距：configure 之后、首次绘制之前也可能被问到
+    // 坐标（命中判定就靠 pixelToPoint），此时 geom.cell 不能是 0。
+    geom.cell = (size - margin * 2) / (T.DEFAULT_SIZE - 1);
   }
 
   /** 取当前对局的路数，并据此更新格距。 */

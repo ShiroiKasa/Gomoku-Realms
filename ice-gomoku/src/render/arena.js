@@ -38,9 +38,10 @@
     snow: 'rgba(232, 245, 255, 0.85)',
     iceGlow: 'rgba(140, 205, 255, 0.22)',
 
-    // 棋盘（冰川质感）
+    // 棋盘（冰川质感）—— 必须与 render/board.js 的 COLORS 保持一致，
+    // 河流首尾的淡出靠它对齐棋盘面色，色值不一致就会露出接缝。
     boardTop: '#eef7fd',
-    boardBottom: '#c2dcef',
+    boardBottom: '#bcd8ec',
     boardRim: 'rgba(140, 200, 232, 0.9)',
     frost: 'rgba(255, 255, 255, 0.5)',
 
@@ -105,6 +106,8 @@
     geom.size = size;
     geom.margin = margin;
     geom.origin = margin;
+    // 先按默认路数算一次格距：configure 之后、首次绘制之前
+    // 也可能被问到坐标（boardRect / cellBox），此时 geom.cell 不能是 0。
     geom.cell = (size - margin * 2) / (T.DEFAULT_SIZE - 1);
   }
 
@@ -355,37 +358,60 @@
       ')';
   }
 
-  /** 河流区域：当前河列的整条纵向带。 */
+  /**
+   * 河流的横向边界（CSS 像素）。
+   * 河流纵向铺满整个棋盘面——它是一条穿过画面的河，不该在首尾两行处截断。
+   */
+  function riverBounds(state) {
+    var columns = River.getColumns(state.arenaState);
+    var box = cellBox(state, 0, 0);
+
+    return {
+      columns: columns,
+      left: box.cx + (columns[0] - 0.5) * geom.cell,
+      right: box.cx + (columns[columns.length - 1] + 0.5) * geom.cell
+    };
+  }
+
+  /** 河流区域：当前河列的整条纵向带，纵向铺满棋盘面。 */
   function drawRiver(ctx, state) {
     if (!River || !state.arenaState) return;
 
-    var columns = River.getColumns(state.arenaState);
-    if (columns.length === 0) return;
-
     var level = state.arenaState.waterLevel || 0;
-    var first = columns[0];
-    var last = columns[columns.length - 1];
-    var box = cellBox(state, 0, 0);
+    var bounds = riverBounds(state);
 
-    var left = box.cx + (first - 0.5) * geom.cell;
-    var right = box.cx + (last + 0.5) * geom.cell;
-    var top = box.cy - 0.5 * geom.cell;
-    var height = (state.size - 1) * geom.cell + geom.cell;
+    if (bounds.columns.length === 0) return;
+
+    var top = 0;
+    var height = geom.size;
+    var width = bounds.right - bounds.left;
 
     ctx.save();
-    clipBoard(ctx, state);
 
-    // 水带主体
-    var grad = ctx.createLinearGradient(left, 0, right, 0);
+    // 横向渐变：两岸略深、中间提亮，让水面有体积感
     var base = riverColor(level);
+    var grad = ctx.createLinearGradient(bounds.left, 0, bounds.right, 0);
     grad.addColorStop(0, base);
     grad.addColorStop(0.5, riverColor(Math.min(T.RIVER_MAX_WATER, level + 18)));
     grad.addColorStop(1, base);
 
     ctx.fillStyle = grad;
-    ctx.fillRect(left, top, right - left, height);
+    ctx.fillRect(bounds.left, top, width, height);
+
+    // 纵向收尾：首尾各淡出一段，与棋盘面色融合，
+    // 避免在棋盘上下边缘出现生硬的横向截断。
+    var fade = geom.margin * 1.15;
+    var fadeGrad = ctx.createLinearGradient(0, 0, 0, geom.size);
+    fadeGrad.addColorStop(0, COLORS.boardTop);
+    fadeGrad.addColorStop(fade / geom.size, 'rgba(238, 247, 253, 0)');
+    fadeGrad.addColorStop(1 - fade / geom.size, 'rgba(188, 216, 236, 0)');
+    fadeGrad.addColorStop(1, COLORS.boardBottom);
+
+    ctx.fillStyle = fadeGrad;
+    ctx.fillRect(bounds.left, top, width, height);
 
     // 河心两列轻微高亮，暗示这里冲走概率最高
+    var box = cellBox(state, 0, 0);
     var heartLeft = box.cx + (6 - 0.5) * geom.cell;
     var heartWidth = 2 * geom.cell;
 
@@ -400,8 +426,8 @@
     for (var y = 0; y < state.size; y++) {
       var cy = box.cy + y * geom.cell;
       ctx.beginPath();
-      ctx.moveTo(left + 3, cy - geom.cell * 0.22);
-      ctx.lineTo(right - 3, cy - geom.cell * 0.22);
+      ctx.moveTo(bounds.left + 3, cy - geom.cell * 0.22);
+      ctx.lineTo(bounds.right - 3, cy - geom.cell * 0.22);
       ctx.stroke();
     }
 
@@ -430,8 +456,8 @@
 
     ctx.fillStyle = grad;
     ctx.fillRect(
-      box.cx - geom.cell, box.cy - geom.cell,
-      (state.size + 1) * geom.cell, (state.size + 1) * geom.cell
+      box.cx - geom.cell, -geom.cell,
+      (state.size + 1) * geom.cell, geom.size + geom.cell * 2
     );
 
     ctx.restore();
@@ -471,14 +497,13 @@
 
     if (!rainStreaks) initRain();
 
-    var columns = River.getColumns(state.arenaState);
-    if (columns.length === 0) return;
+    // 雨丝与河流同样纵向铺满棋盘面，并避开首尾淡出区，免得糊在边缘外面
+    var bounds = riverBounds(state);
+    if (bounds.columns.length === 0) return;
 
-    var box = cellBox(state, 0, 0);
-    var left = box.cx + (columns[0] - 0.5) * geom.cell;
-    var right = box.cx + (columns[columns.length - 1] + 0.5) * geom.cell;
-    var top = box.cy - 0.5 * geom.cell;
-    var height = (state.size - 1) * geom.cell + geom.cell;
+    var fade = geom.margin * 1.15;
+    var top = fade;
+    var height = geom.size - fade * 2;
 
     ctx.save();
     clipBoard(ctx, state);
@@ -488,7 +513,7 @@
 
     for (var i = 0; i < rainStreaks.length; i++) {
       var s = rainStreaks[i];
-      var x = left + (right - left) * s.u;
+      var x = bounds.left + (bounds.right - bounds.left) * s.u;
       var y = top + height * s.y;
 
       ctx.beginPath();
