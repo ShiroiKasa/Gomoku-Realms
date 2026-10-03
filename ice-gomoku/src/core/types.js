@@ -150,6 +150,16 @@
       return factor === undefined ? 0 : factor;
     },
 
+    // ── 「危险雷区」常量 ────────────────────────────────────────────────
+    // arenaState（mine 模式）：
+    //   { mines: { "x,y": 剩余回合数 }, rng: function }
+    MINE_INITIAL_MIN: 5,        // 开局雷区数量下限
+    MINE_INITIAL_MAX: 8,        // 开局雷区数量上限
+    MINE_COUNTDOWN_MIN: 5,      // 倒计时下限（含）
+    MINE_COUNTDOWN_MAX: 15,     // 倒计时上限（含）
+    MINE_SPAWN_INTERVAL: 5,     // 每 N 回合新增 1 个雷区
+    MINE_BLAST_RADIUS: 1,       // 爆炸半径：1 即 3×3 = 中心 ±1
+
     /**
      * 创建一个新对局的初始状态。
      *

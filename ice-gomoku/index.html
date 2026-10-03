@@ -269,12 +269,89 @@
       color: var(--ink);
     }
 
-    footer {
+    /* ── 规则面板 ───────────────────────────────────────── */
+    .rules {
+      width: 100%;
       max-width: 660px;
-      text-align: center;
-      font-size: 12px;
-      line-height: 1.9;
+      padding: 16px 20px;
+      border: 1px solid var(--panel-line);
+      border-radius: 14px;
+      background: var(--panel);
+      text-align: left;
+      font-size: 12.5px;
+      line-height: 1.85;
       color: var(--ink-dim);
+    }
+
+    .rules[hidden] { display: none; }
+
+    .rules h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      color: var(--ice);
+    }
+
+    .rules h2 .rules-mode {
+      margin-left: 10px;
+      padding: 2px 10px;
+      border: 1px solid rgba(111, 211, 255, 0.35);
+      border-radius: 999px;
+      font-size: 11.5px;
+      letter-spacing: 0.1em;
+      color: var(--ink);
+    }
+
+    /* 基础规则（各模式通用） */
+    .rules-base {
+      margin: 0 0 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(158, 216, 255, 0.14);
+      color: var(--ink-dim);
+    }
+
+    /* 场地规则：每个模式一块，只显示当前模式的 */
+    .rules-arena {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .rules-arena[hidden] { display: none; }
+
+    .rules-arena li {
+      position: relative;
+      margin: 0 0 6px;
+      padding-left: 16px;
+    }
+
+    .rules-arena li::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 0.72em;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--ice);
+      opacity: 0.6;
+    }
+
+    .rules-arena li:last-child { margin-bottom: 0; }
+
+    .rules-arena b {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .rules-arena kbd {
+      padding: 1px 5px;
+      border: 1px solid rgba(158, 216, 255, 0.3);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--ink);
     }
 
     /* ── 图例 ───────────────────────────────────────────── */
@@ -327,13 +404,18 @@
       border: 1px solid #f0a24a;
     }
 
-    /* 说明文字按模式切换：两个 span 叠放，只显示其中一个 */
-    footer span[data-role^="footer-"] {
-      display: block;
+    /* 雷区：红色虚线圆，与画布上的标记一致 */
+    .legend-icon[data-icon="mine"] {
+      border-radius: 50%;
+      background: rgba(201, 48, 44, 0.3);
+      border: 1px dashed #D9534F;
+      box-sizing: border-box;
     }
 
-    footer span[data-role^="footer-"][hidden] {
-      display: none;
+    /* 爆炸：实心红点 */
+    .legend-icon[data-icon="blast"] {
+      border-radius: 50%;
+      background: rgba(217, 83, 79, 0.85);
     }
   </style>
 </head>
@@ -359,9 +441,14 @@
           <span class="mode-name">山谷溪流</span>
           <span class="mode-desc">水位上涨，河中棋子会被冲走</span>
         </button>
+
+        <button type="button" class="mode-btn" data-role="btn-mode-mine">
+          <span class="mode-name">危险雷区</span>
+          <span class="mode-desc">倒计时地雷，可主动引爆换取清场</span>
+        </button>
       </div>
 
-      <p class="menu-version">v0.4 · 本地原型 · 无外部依赖</p>
+      <p class="menu-version">v0.5 · 本地原型 · 无外部依赖</p>
     </div>
   </div>
 
@@ -418,22 +505,54 @@
         <span class="legend-item" data-role="legend-river">
           <span class="legend-icon" data-icon="heart"></span>河心最危险（冲走概率最高）
         </span>
+        <span class="legend-item" data-role="legend-mine">
+          <span class="legend-icon" data-icon="mine"></span>雷区（数字为剩余回合，归零即爆）
+        </span>
+        <span class="legend-item" data-role="legend-mine">
+          <span class="legend-icon" data-icon="blast"></span>爆炸范围 3×3，含连锁引爆
+        </span>
       </section>
 
-      <footer data-role="footer" hidden>
-        <span data-role="footer-snow">
-          黑先手，横、竖、斜任意方向连成五子即胜。<br>
-          冰锥预警位置可见、落下时机不可知：每回合结束各 30% 概率落下，
-          砸毁该格棋子并留下冰块，冰块 2 回合后融化。<br>
-          冰块格不可落子；预警格可以落子，但要承担被砸的风险。
-        </span>
-        <span data-role="footer-river">
-          黑先手，横、竖、斜任意方向连成五子即胜。<br>
-          第 8 回合起下雨，水位每回合 +2%（上限 80%）。水位到 30% / 60% 时
-          河流向两岸各扩 1 列，且永不缩回。<br>
-          河中棋子每回合按「水位 × 位置系数」被冲走：河心 1.0、次外圈 0.7、最外圈 0.4。
-        </span>
-      </footer>
+      <section class="rules" data-role="rules">
+        <h2>规则<span class="rules-mode" data-role="rules-mode">经典五子棋</span></h2>
+
+        <p class="rules-base">
+          黑先手，双方轮流在交叉点落子。横、竖、斜任意方向先连成五子者胜。
+        </p>
+
+        <ul class="rules-arena" data-role="rules-classic">
+          <li>本模式没有场地机制，纯五子棋对决。</li>
+          <li>落子后立即判定五连，成五即胜。</li>
+        </ul>
+
+        <ul class="rules-arena" data-role="rules-snow" hidden>
+          <li>棋盘上始终维持 <b>5 个冰锥预警</b>（蓝色三角），位置可见，但落下时机不可知。</li>
+          <li>每回合结束，每个预警<b>独立</b>以 <b>30%</b> 概率落下；落下即砸毁该格棋子并生成冰块。</li>
+          <li>冰块持续 <b>2 回合</b>后融化；冰块格<b>不可落子</b>。</li>
+          <li><b>预警格可以落子</b>——但要承担被砸的风险，这正是本模式的博弈核心。</li>
+          <li>成五立即判胜，不进入冰锥结算。</li>
+        </ul>
+
+        <ul class="rules-arena" data-role="rules-river" hidden>
+          <li>第 6、7 列为河流，<b>可以正常落子</b>，棋子也照常参与五连判定。</li>
+          <li>前 7 回合无雨、水位 0；<b>第 8 回合起</b>下雨，水位每回合 <b>+2%</b>，上限 <b>80%</b>。</li>
+          <li>水位达 <b>30%</b> 时河流向两岸各扩 1 列（第 5、8 列）；达 <b>60%</b> 时再扩 1 列（第 4、9 列）。扩展<b>永久</b>，不会缩回。</li>
+          <li>河中棋子每回合被冲走，概率 = <b>水位 × 位置系数</b>：河心(6,7) <b>1.0</b>、次外圈(5,8) <b>0.7</b>、最外圈(4,9) <b>0.4</b>。</li>
+          <li>例：水位 40% 时，河心 40%、次外圈 28%、最外圈 16%。</li>
+          <li>被冲走的棋子直接消失，格子恢复为空，可重新落子。</li>
+          <li>成五立即判胜，不进入冲走结算。</li>
+        </ul>
+
+        <ul class="rules-arena" data-role="rules-mine" hidden>
+          <li>开局随机埋 <b>5～8 颗雷</b>，每颗带 <b>5～15 回合</b>倒计时，数字直接显示在格子上（双方可见）。</li>
+          <li>每回合结束所有雷区倒计时 <b>-1</b>，归零即爆；此后<b>每 5 回合</b>再埋 1 颗。</li>
+          <li>爆炸范围为 <b>3×3</b>，摧毁范围内<b>所有棋子</b>（不分敌我）；棋盘边缘超出部分直接忽略。</li>
+          <li>爆炸会摧毁范围内的其他雷区并<b>连锁引爆</b>，每个雷区只引爆一次。</li>
+          <li>雷区格<b>可以落子</b>，落子即<b>主动引爆</b>——代价是刚落下的这枚棋子本身也会被炸掉，但不消耗额外回合。</li>
+          <li>引爆后不留痕迹，格子立即恢复可用；倒计时 ≤3 时数字会闪烁警示。</li>
+          <li><b>成五优先</b>：落子后先判五连，成五直接判胜，不引爆、不进入结算。</li>
+        </ul>
+      </section>
     </main>
   </div>
 
@@ -442,6 +561,7 @@
   <script src="src/core/board.js"></script>
   <script src="src/core/arena.js"></script>
   <script src="src/core/river.js"></script>
+  <script src="src/core/mine.js"></script>
   <script src="src/core/rules.js"></script>
   <script src="src/core/mode.js"></script>
   <script src="src/render/board.js"></script>

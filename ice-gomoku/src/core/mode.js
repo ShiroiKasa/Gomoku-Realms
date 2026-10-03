@@ -7,6 +7,7 @@
  *   arena: null    → 该模式没有场地机制（arenaState 保持 null）
  *   arena: 'snow'  → 启用雪山洞穴（冰锥预警 + 冰块）
  *   arena: 'river' → 启用山谷溪流（水位上涨 + 河流扩展 + 冲走棋子）
+ *   arena: 'mine'  → 启用危险雷区（倒计时 + 3×3 爆炸 + 连锁引爆）
  */
 (function () {
   'use strict';
@@ -30,6 +31,12 @@
       id: 'river',
       name: '山谷溪流',
       arena: 'river'     // 启用河流机制
+    },
+
+    mine: {
+      id: 'mine',
+      name: '危险雷区',
+      arena: 'mine'      // 启用雷区机制
     },
 
     DEFAULT: 'classic',

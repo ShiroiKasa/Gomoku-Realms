@@ -18,6 +18,7 @@
   var B = G.Board;
   var Arena = G.Arena;
   var River = G.River;
+  var Mine = G.Mine;
 
   // ── 几何参数（由 configure 写入）──────────────────────────────────────────
   var geom = {
@@ -77,13 +78,27 @@
     gaugeMid: '#4a90d9',
     gaugeWarn: '#f0a24a',
     gaugeDanger: '#e8543f',
-    gaugeText: 'rgba(214, 234, 248, 0.92)'
+    gaugeText: 'rgba(214, 234, 248, 0.92)',
+
+    // 雷区
+    mineRing: '#D9534F',
+    mineRingHot: '#C9302C',          // 倒计时紧迫时更深
+    mineCore: 'rgba(201, 48, 44, 0.30)',
+    mineCoreHot: 'rgba(201, 48, 44, 0.52)',
+    mineText: '#FFF3F2',
+    mineTextHot: '#FFD9D6',
+    minePreview: 'rgba(217, 83, 79, 0.20)',
+    minePreviewEdge: 'rgba(217, 83, 79, 0.55)',
+    blast: 'rgba(255, 236, 210, 0.95)',
+    blastRing: 'rgba(255, 168, 96, 0.85)'
   };
 
   // ── 时间与动画 ──────────────────────────────────────────────────────────
   var FALL_MS = 200;        // 冰锥落下的闪光时长
   var KNOCK_MS = 260;       // 冰块生成动画时长
   var RIPPLE_MS = 520;      // 棋子被冲走的水波时长
+  var BLAST_MS = 260;       // 雷区爆炸的闪光时长
+  var MINE_BLINK_MS = 420;  // 倒计时紧迫时的闪烁周期
   var SNOWFLAKE_COUNT = 44;
   var RAIN_STREAK_COUNT = 26;
 
@@ -96,6 +111,9 @@
 
   /** 棋子被冲走的水波：{ "x,y": 起始时刻 }。只影响绘制。 */
   var rippleAt = {};
+
+  /** 雷区爆炸的闪光：{ "x,y": 起始时刻 }。只影响绘制。 */
+  var blastAt = {};
 
   /** 雨丝（相对坐标 0..1，绘制时再换算），延迟初始化。 */
   var rainStreaks = null;
@@ -194,10 +212,24 @@
     }
   }
 
+  /**
+   * 记录雷区爆炸波及的格子，触发闪光。
+   * 由 main.js 在结算后调用。纯视觉，不影响任何规则。
+   * @param {Array<{x:number,y:number}>} cells
+   */
+  function notifyBlasts(cells) {
+    if (!cells) return;
+
+    for (var i = 0; i < cells.length; i++) {
+      blastAt[T.cellKey(cells[i].x, cells[i].y)] = clock;
+    }
+  }
+
   /** 清空动画痕迹（重开时调用）。 */
   function resetEffects() {
     knockAt = {};
     rippleAt = {};
+    blastAt = {};
     snowflakes = null;
     rainStreaks = null;
     lastClock = clock;
@@ -631,6 +663,176 @@
     ctx.restore();
   }
 
+  // ── 危险雷区 ────────────────────────────────────────────────────────────
+
+  /** 倒计时紧迫度：≤3 视为即将爆炸，需要闪烁与加粗。 */
+  function mineIsUrgent(turns) {
+    return turns <= 3;
+  }
+
+  /**
+   * 雷区底盘：红色虚线圆 + 淡红填充。画在棋子**之下**。
+   *
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {object} state
+   * @param {number} x
+   * @param {number} y
+   * @param {number} turns
+   */
+  function drawMineMarker(ctx, state, x, y, turns) {
+    var box = cellBox(state, x, y);
+    var urgent = mineIsUrgent(turns);
+    var radius = geom.cell * 0.4;
+
+    ctx.save();
+
+    // 紧迫时按周期闪烁，越接近 0 越亮
+    var alpha = 1;
+    if (urgent) {
+      var phase = (clock % MINE_BLINK_MS) / MINE_BLINK_MS;
+      alpha = 0.55 + 0.45 * Math.abs(Math.sin(phase * Math.PI));
+    }
+
+    ctx.globalAlpha = alpha;
+
+    // 底盘
+    ctx.beginPath();
+    ctx.arc(box.cx, box.cy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = urgent ? COLORS.mineCoreHot : COLORS.mineCore;
+    ctx.fill();
+
+    // 红色虚线圆环
+    ctx.beginPath();
+    ctx.arc(box.cx, box.cy, radius, 0, Math.PI * 2);
+    ctx.setLineDash([Math.max(3, geom.cell * 0.14), Math.max(2, geom.cell * 0.1)]);
+    ctx.strokeStyle = urgent ? COLORS.mineRingHot : COLORS.mineRing;
+    ctx.lineWidth = Math.max(2, geom.cell * (urgent ? 0.09 : 0.06));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.restore();
+  }
+
+  /**
+   * 倒计时数字。画在棋子**之上**，否则有棋子的格子会把数字盖住。
+   * 白字加深色描边，保证在黑子与白子上都读得清。
+   */
+  function drawMineNumbers(ctx, state) {
+    if (!Mine || !state.arenaState || !state.arenaState.mines) return;
+
+    var mines = Mine.mineList(state.arenaState);
+    if (mines.length === 0) return;
+
+    ctx.save();
+    clipBoard(ctx, state);
+    ctx.font = '700 ' + Math.max(12, Math.round(geom.cell * 0.42)) +
+      'px "Microsoft YaHei", "PingFang SC", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (var i = 0; i < mines.length; i++) {
+      var box = cellBox(state, mines[i].x, mines[i].y);
+      var urgent = mineIsUrgent(mines[i].turns);
+      var alpha = 1;
+
+      if (urgent) {
+        var phase = (clock % MINE_BLINK_MS) / MINE_BLINK_MS;
+        alpha = 0.6 + 0.4 * Math.abs(Math.sin(phase * Math.PI));
+      }
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      // 描边保证在黑白棋子上都可读
+      ctx.lineWidth = Math.max(2, geom.cell * 0.11);
+      ctx.strokeStyle = 'rgba(28, 8, 8, 0.85)';
+      ctx.strokeText(String(mines[i].turns), box.cx, box.cy + 0.5);
+
+      ctx.fillStyle = urgent ? COLORS.mineTextHot : COLORS.mineText;
+      ctx.fillText(String(mines[i].turns), box.cx, box.cy + 0.5);
+
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * 爆炸闪光：白色亮斑 + 橙色扩散环，BLAST_MS 内衰减。
+   * 只对「本帧仍在攻击范围内」的格子生效——规则层已把雷区删除，
+   * 这里靠 blastAt 记录的时间戳在之后若干帧内继续画余晖。
+   */
+  function drawBlastFlashes(ctx, state) {
+    var key;
+
+    ctx.save();
+    clipBoard(ctx, state);
+
+    for (key in blastAt) {
+      if (!Object.prototype.hasOwnProperty.call(blastAt, key)) continue;
+
+      var age = clock - blastAt[key];
+      if (age >= BLAST_MS) { delete blastAt[key]; continue; }
+
+      var parts = key.split(',');
+      var box = cellBox(state, parseInt(parts[0], 10), parseInt(parts[1], 10));
+      var t = age / BLAST_MS;
+
+      // 中心亮斑
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.fillStyle = COLORS.blast;
+      ctx.beginPath();
+      ctx.arc(box.cx, box.cy, geom.cell * 0.46 * (1 - t * 0.7), 0, Math.PI * 2);
+      ctx.fill();
+
+      // 扩散环
+      ctx.globalAlpha = (1 - t) * 0.8;
+      ctx.strokeStyle = COLORS.blastRing;
+      ctx.lineWidth = Math.max(1, geom.cell * 0.07 * (1 - t));
+      ctx.beginPath();
+      ctx.arc(box.cx, box.cy, geom.cell * (0.2 + 0.62 * t), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * 悬停预览：鼠标停在雷区格上时，半透明标出 3×3 爆炸范围。
+   * 纯提示，不影响规则。
+   */
+  function drawMinePreview(ctx, state, ghost) {
+    if (!Mine || !state.arenaState) return;
+    if (!ghost || ghost.x === undefined) return;
+
+    // 只有悬停在雷区上才预览
+    if (!Mine.hasMine(state.arenaState, ghost.x, ghost.y)) return;
+
+    var radius = T.MINE_BLAST_RADIUS;
+
+    ctx.save();
+    clipBoard(ctx, state);
+
+    for (var dy = -radius; dy <= radius; dy++) {
+      for (var dx = -radius; dx <= radius; dx++) {
+        var x = ghost.x + dx;
+        var y = ghost.y + dy;
+        if (!B.isInside(state, x, y)) continue;
+
+        var box = cellBox(state, x, y);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = COLORS.minePreview;
+        ctx.fillRect(box.x, box.y, box.size, box.size);
+
+        ctx.strokeStyle = COLORS.minePreviewEdge;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.size - 1, box.size - 1);
+      }
+    }
+
+    ctx.restore();
+  }
+
   // ── 冰锥预警 ────────────────────────────────────────────────────────────
 
   /** 向下指的三角形路径。 */
@@ -697,6 +899,22 @@
   function drawArena(ctx, state) {
     // 经典模式没有场地：arenaState 为 null，直接不画任何东西
     if (!state || !state.arenaState) return;
+
+    // 危险雷区：底盘 + 悬停的爆炸范围预览（数字在 overlay 层画）
+    if (state.arenaState.mines) {
+      var list = Mine.mineList(state.arenaState);
+      if (list.length === 0) return;
+
+      ctx.save();
+      clipBoard(ctx, state);
+
+      for (var m = 0; m < list.length; m++) {
+        drawMineMarker(ctx, state, list[m].x, list[m].y, list[m].turns);
+      }
+
+      ctx.restore();
+      return;
+    }
 
     // 山谷溪流
     if (state.arenaState.riverColumns) {
@@ -845,6 +1063,13 @@
   function drawArenaOverlay(ctx, state) {
     if (!state || !state.arenaState) return;
 
+    // 危险雷区：倒计时数字与爆炸闪光都必须压在棋子上方
+    if (state.arenaState.mines) {
+      drawMineNumbers(ctx, state);
+      drawBlastFlashes(ctx, state);
+      return;
+    }
+
     // 山谷溪流：水波画在棋子上方，最后叠加水位条
     if (state.arenaState.riverColumns) {
       drawRipples(ctx, state);
@@ -882,6 +1107,8 @@
     tick: tick,
     notifyDrops: notifyDrops,
     notifyWashed: notifyWashed,
+    notifyBlasts: notifyBlasts,
+    drawMinePreview: drawMinePreview,
     resetEffects: resetEffects,
     drawScene: drawScene,
     drawArena: drawArena,

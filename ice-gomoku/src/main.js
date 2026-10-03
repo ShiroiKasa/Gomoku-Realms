@@ -22,6 +22,7 @@
   var Rules = G.Rules;
   var Arena = G.Arena;
   var River = G.River;
+  var Mine = G.Mine;
   var Modes = G.Modes;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
@@ -142,11 +143,12 @@
 
     var ghost = ghostFromHover();
 
-    RenderArena.drawScene(ctx, state);         // 洞穴背景（棋盘之下）
-    RenderBoard.drawBoard(ctx, state);         // 第一层：格子线
-    RenderArena.drawArena(ctx, state, ghost);  // 第二层：冰锥预警（棋子之下）
-    RenderBoard.drawPieces(ctx, state, ghost); // 第三层：棋子
-    RenderArena.drawArenaOverlay(ctx, state);  // 冰块（棋子之上）
+    RenderArena.drawScene(ctx, state);            // 洞穴背景（棋盘之下）
+    RenderBoard.drawBoard(ctx, state);            // 第一层：格子线
+    RenderArena.drawArena(ctx, state, ghost);     // 第二层：场地（棋子之下）
+    RenderBoard.drawPieces(ctx, state, ghost);    // 第三层：棋子
+    RenderArena.drawMinePreview(ctx, state, ghost); // 雷区悬停：3×3 爆炸范围（棋子之上）
+    RenderArena.drawArenaOverlay(ctx, state);     // 冰块/水波/水位条/雷区数字（最上层）
 
     updateHud();
   }
@@ -182,7 +184,9 @@
     // 场地信息：按场地类型显示不同内容
     var arena = state.arenaState;
 
-    if (arena && arena.riverColumns) {
+    if (arena && arena.mines) {
+      elements.arena.textContent = '雷区 ' + Mine.countMines(arena);
+    } else if (arena && arena.riverColumns) {
       elements.arena.textContent = '水位 ' + arena.waterLevel + '% · 河宽 ' + arena.riverColumns.length + ' 列';
     } else if (arena) {
       elements.arena.textContent =
@@ -192,20 +196,24 @@
       elements.arena.textContent = '—';
     }
 
-    // 图例与说明按模式切换；经典模式两者都隐藏
-    var arenaKind = mode.arena || '';
-    var showLegend = !!arenaKind;
+    // 图例只在有场地的模式显示；规则面板每个模式都有（含经典）。
+    // 注意：经典模式的 mode.arena 是 null，不能用它当分类键，
+    // 否则 arenaKind 会变成 ''，四个规则块都会被判为「不匹配」而全部隐藏。
+    var arenaKind = mode.arena || mode.id;
 
-    elements.legend.hidden = !showLegend;
-    elements.footer.hidden = !showLegend;
+    elements.legend.hidden = !mode.arena;
+    elements.rulesMode.textContent = mode.name;
 
     for (var i = 0; i < elements.legendSnow.length; i++) {
       elements.legendSnow[i].hidden = arenaKind !== 'snow';
       elements.legendRiver[i].hidden = arenaKind !== 'river';
+      elements.legendMine[i].hidden = arenaKind !== 'mine';
     }
 
-    elements.footerSnow.hidden = arenaKind !== 'snow';
-    elements.footerRiver.hidden = arenaKind !== 'river';
+    elements.rulesClassic.hidden = arenaKind !== 'classic';
+    elements.rulesSnow.hidden = arenaKind !== 'snow';
+    elements.rulesRiver.hidden = arenaKind !== 'river';
+    elements.rulesMine.hidden = arenaKind !== 'mine';
 
     canvas.classList.toggle('is-over', over);
   }
@@ -229,6 +237,19 @@
    */
   function advanceTurn(state) {
     var arena = state.arenaState;
+
+    // 危险雷区：顺序为「推进手数 → 倒计时 -1 → 引爆归零者 → 每 5 回合埋新雷 → 切换玩家」。
+    // 生成判定依赖推进后的 moveCount，故这里先自增。
+    if (arena && arena.mines) {
+      state.moveCount++;                                         // 1
+      var mined = Mine.settleMines(state, arena, state.moveCount); // 2~4
+
+      // 通知渲染层做爆炸闪光，纯视觉，不影响规则
+      RenderArena.notifyBlasts(mined.cells);
+
+      state.currentPlayer = state.currentPlayer === T.BLACK ? T.WHITE : T.BLACK; // 5
+      return;
+    }
 
     // 山谷溪流：顺序为「推进手数 → 水位 → 河流扩展 → 冲走判定 → 切换玩家」。
     // 水位公式依赖推进后的 moveCount，故这里先自增。
@@ -259,10 +280,11 @@
 
   /**
    * 处理一次落子尝试。严格按下列顺序执行：
-   *   检查合法性 → 落子 → 判五连 → 若胜则结束 → advanceTurn → render
+   *   检查合法性 → 落子 → 判五连 → 若胜则结束
+   *              → 未胜且落在雷区上则主动引爆 → advanceTurn → render
    */
   function playMove(x, y) {
-    // 1. 检查合法性（含场地规则：冰块格不可落子；预警格可以落子）
+    // 1. 检查合法性（含场地规则：冰块格不可落子；预警格与雷区格都可以落子）
     if (state.winner !== T.WINNER_NONE) return;
     if (!B.isLegal(state, state.arenaState, x, y)) return;
 
@@ -277,7 +299,7 @@
     var result = Rules.checkFrom(state, x, y, player);
 
     if (result) {
-      // 4. 若胜则结束（不再推进回合）
+      // 4. 若胜则结束：不引爆、不进入 advanceTurn
       state.winner = result.winner;
       state.winningLine = result.line;
       score[player === T.BLACK ? 'black' : 'white']++;
@@ -286,10 +308,18 @@
       return;
     }
 
-    // 5. advanceTurn
+    // 5. 主动引爆：落在雷区格上立即引爆该格（含连锁）。
+    //    刚落下的这枚棋子本身也会被炸掉——这正是主动引爆的代价。
+    if (state.arenaState && state.arenaState.mines &&
+        Mine.hasMine(state.arenaState, x, y)) {
+      var blasted = Mine.detonate(state, state.arenaState, x, y);
+      RenderArena.notifyBlasts(blasted.cells);
+    }
+
+    // 6. advanceTurn
     advanceTurn(state);
 
-    // 6. render
+    // 7. render
     render();
   }
 
@@ -313,6 +343,7 @@
    *   classic → arena: null    → arenaState = null，纯五子棋
    *   snow    → arena: 'snow'  → 建立 arenaState 并补满 5 个冰锥预警
    *   river   → arena: 'river' → 建立河流状态（水位 0，河宽 2 列）
+   *   mine    → arena: 'mine'  → 随机埋 5～8 个雷区，各带 5～15 回合倒计时
    */
   function restartGame() {
     window.clearTimeout(winNoticeTimer);
@@ -327,11 +358,13 @@
       state.arenaState = Arena.create(state);
     } else if (mode.arena === 'river') {
       state.arenaState = River.create();
+    } else if (mode.arena === 'mine') {
+      state.arenaState = Mine.create(state);
     } else {
       state.arenaState = null;   // 经典模式没有场地
     }
 
-    // 清掉上一局残留的动画痕迹（闪光、雪花、水波）
+    // 清掉上一局残留的动画痕迹（闪光、雪花、水波、爆炸）
     RenderArena.resetEffects();
 
     render();
@@ -446,6 +479,7 @@
     elements.modeClassicBtn.addEventListener('click', function () { enterMode('classic'); });
     elements.modeSnowBtn.addEventListener('click', function () { enterMode('snow'); });
     elements.modeRiverBtn.addEventListener('click', function () { enterMode('river'); });
+    elements.modeMineBtn.addEventListener('click', function () { enterMode('mine'); });
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', resizeCanvas);
@@ -467,18 +501,23 @@
     elements.score = $('score');
     elements.arena = $('arena');
     elements.legend = $('legend');
-    elements.footer = $('footer');
+    elements.rulesMode = $('rules-mode');
 
     elements.legendSnow = $all('legend-snow');
     elements.legendRiver = $all('legend-river');
-    elements.footerSnow = $('footer-snow');
-    elements.footerRiver = $('footer-river');
+    elements.legendMine = $all('legend-mine');
+
+    elements.rulesClassic = $('rules-classic');
+    elements.rulesSnow = $('rules-snow');
+    elements.rulesRiver = $('rules-river');
+    elements.rulesMine = $('rules-mine');
 
     elements.restartBtn = $('btn-restart');
     elements.backBtn = $('btn-back');
     elements.modeClassicBtn = $('btn-mode-classic');
     elements.modeSnowBtn = $('btn-mode-snow');
     elements.modeRiverBtn = $('btn-mode-river');
+    elements.modeMineBtn = $('btn-mode-mine');
 
     // 启动时停在开始界面：先看到菜单，不自动开局
     state = T.createGameState(T.DEFAULT_SIZE);
