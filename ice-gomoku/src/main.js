@@ -25,6 +25,7 @@
   var River = G.River;
   var Mine = G.Mine;
   var Modes = G.Modes;
+  var AI = G.AI;
   var RenderScene = G.Render.Scene;
   var RenderBoard = G.Render.Board;
   var RenderArena = G.Render.Arena;
@@ -51,6 +52,47 @@
   var winNoticeTimer = null;
   var hudCache = {};         // HUD 只在值变化时才写 DOM（连续重绘下必须节流）
 
+  // ── 电脑对手（PvE）──────────────────────────────────────────────────────
+  // 电脑执白，人执黑，所以开局第一手永远是人下的。
+  // 决策本身很轻（模式表查表，通常 1ms 以内），所以不需要分帧搜索；
+  // 这里只做一件事：落子前等一小会儿，让人看清「轮到电脑了」。
+  var ai = {
+    level: 'human',   // 'human' | 'easy' | 'normal' | 'hard'
+    timer: 0,         // 还需要等多久才落子（毫秒，仅供界面显示"思考中"）
+    deadline: 0       // 到点就落子的绝对时刻
+  };
+
+  /** 取当前时间（优先高精度时钟）。 */
+  function nowMs() {
+    if (window.performance && typeof window.performance.now === 'function') {
+      return window.performance.now();
+    }
+
+    return Date.now();
+  }
+
+  /** 是否启用了电脑对手。 */
+  function aiIsActive() {
+    return ai.level !== 'human';
+  }
+
+  /** 电脑执白：棋盘为空时黑方是人，所以第一手永远由人来下。 */
+  function aiPlayer() {
+    return T.WHITE;
+  }
+
+  /** 现在是否轮到电脑。 */
+  function aiShouldMove() {
+    if (!isPlaying() || !aiIsActive()) return false;
+    if (state.winner !== T.WINNER_NONE) return false;
+    return state.currentPlayer === aiPlayer();
+  }
+
+  /** 是否正在「思考」（已经在等待落子）。 */
+  function aiIsThinking() {
+    return ai.timer > 0;
+  }
+
   // ── 顶层状态：只有两个屏幕、两个模式 ────────────────────────────────────
   var appState = {
     screen: 'menu',            // 'menu' | 'game'
@@ -69,13 +111,19 @@
   }
 
   /**
-   * 取某 role 的全部元素。
-   * 优先用 querySelectorAll；不支持时（如测试用的极简 DOM 桩）退回逐个探测，
-   * 保证调用方拿到的始终是「可遍历 + 有 length」的对象。
+   * 取某 role 的全部元素，**始终返回真数组**。
+   *
+   * 优先用 querySelectorAll；不支持时（如测试用的极简 DOM 桩）退回逐个探测。
+   * 注意 querySelectorAll 返回的是 NodeList —— 它有 length 也能遍历，
+   * 但**没有数组方法**（concat / map / slice 都不行）。所以这里统一转成数组，
+   * 调用方才能安全地拼接多个来源（踩过这个坑：拿 NodeList 直接 .concat
+   * 会抛 TypeError，把整个 init 带崩，页面上所有按钮都点不动）。
    */
   function $all(role) {
     if (typeof document.querySelectorAll === 'function') {
-      return document.querySelectorAll('[data-role="' + role + '"]');
+      return Array.prototype.slice.call(
+        document.querySelectorAll('[data-role="' + role + '"]')
+      );
     }
 
     var found = [];
@@ -149,6 +197,8 @@
 
       var stamp = typeof now === 'number' ? now : 0;
 
+      aiFrame();   // 电脑对手：先检查是否到点该落子，再画这一帧
+
       // 推进各层时钟（场景粒子、水纹与闪光、棋子弹入、五连辉光）
       RenderScene.tick(stamp);
       RenderArena.tick(stamp);
@@ -195,6 +245,7 @@
   function ghostFromHover() {
     if (!isPlaying() || !hover) return null;
     if (state.winner !== T.WINNER_NONE) return null;
+    if (aiShouldMove() || aiIsThinking()) return null;   // 电脑思考时不显示人的落点预览
     if (!B.isLegal(state, state.arenaState, hover.x, hover.y)) return null;
 
     return { x: hover.x, y: hover.y, player: state.currentPlayer };
@@ -287,6 +338,71 @@
     elements.rulesMine.hidden = arenaKind !== 'mine';
 
     setToggle(canvas, 'isOver', 'is-over', over);
+
+    updateAiHud(over);
+  }
+
+  /**
+   * 档位按钮的选中态：菜单与游戏内两套一起更新（选中态样式挂在 aria-pressed 上）。
+   *
+   * **单拎出来是因为菜单界面也得能立刻变色**：菜单下渲染循环不跑（render() 直接返回），
+   * 若只在 updateAiHud() 里同步，点档位后按钮要等进对局再退回菜单才更新
+   * （实际档位已生效，界面却停在旧选中项）。
+   */
+  function syncLevelButtons() {
+    var all = elements.levelButtons;
+
+    if (!all) return;
+
+    var level = ai.level;
+
+    for (var i = 0; i < all.length; i++) {
+      var on = all[i].getAttribute('data-ai-level') === level;
+
+      if (all[i].getAttribute('aria-pressed') !== String(on)) {
+        all[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    }
+  }
+
+  /** 电脑对手相关的界面：档位按钮的选中态、状态条、以及状态条上的文字。 */
+  function updateAiHud(over) {
+    var active = aiIsActive();
+    var thinking = aiIsThinking();
+    var level = ai.level;
+
+    syncLevelButtons();
+
+    if (!elements.aiStatus) return;
+
+    var thinkingFlag = (thinking && !over) ? '1' : '0';
+    var offFlag = active ? '0' : '1';
+
+    if (hudCache.aiThinking !== thinkingFlag) {
+      hudCache.aiThinking = thinkingFlag;
+      elements.aiStatus.setAttribute('data-thinking', thinkingFlag);
+    }
+
+    if (hudCache.aiOff !== offFlag) {
+      hudCache.aiOff = offFlag;
+      elements.aiStatus.setAttribute('data-off', offFlag);
+    }
+
+    var text;
+
+    if (!active) {
+      text = '人人对战';
+    } else if (over) {
+      text = '对局结束';
+    } else if (thinking) {
+      text = '电脑（' + AI.nameOf(level) + '）思考中';
+    } else if (state.currentPlayer === aiPlayer()) {
+      text = '电脑（' + AI.nameOf(level) + '）执白';
+    } else {
+      text = '电脑（' + AI.nameOf(level) + '）· 轮到你';
+    }
+
+    setText(elements.aiText, 'aiText', text);
   }
 
   // ── 回合推进（独立函数，场地事件的挂载点）──────────────────────────────
@@ -359,6 +475,9 @@
     if (state.winner !== T.WINNER_NONE) return;
     if (!B.isLegal(state, state.arenaState, x, y)) return;
 
+    // 轮电脑时人不许抢着下。电脑自己落子前会先 stopAi()，所以不会误伤。
+    if (aiIsThinking() && state.currentPlayer === aiPlayer()) return;
+
     var player = state.currentPlayer;
 
     // 2. 落子（Board.place 内部还会再校验一次）
@@ -392,6 +511,88 @@
 
     // 7. render
     render();
+
+    // 8. 交给电脑（若这一手之后轮到它）
+    scheduleAi();
+  }
+
+  // ── 电脑对手的驱动 ──────────────────────────────────────────────────────
+  //
+  // 一局的节奏始终是「人下 → 电脑下」。电脑执白，人执黑，
+  // 所以新开一局的第一手永远是人下的，电脑不会抢跑。
+  //
+  // 决策是同步的一次查表（core/ai.js 的 chooseMove，通常 1ms 以内），
+  // 不需要分帧；这里只在落子前放一小段延迟，让人看清「轮到电脑了」。
+
+  /** 让电脑停手：清掉待落子的计时（换人、重开、返回菜单时都要）。 */
+  function stopAi() {
+    ai.timer = 0;
+    ai.deadline = 0;
+  }
+
+  /**
+   * 该电脑下就起一个延迟计时，否则什么也不做。
+   * 由「人落子之后」「重开之后」「切换档位之后」调用。
+   */
+  function scheduleAi() {
+    if (!aiShouldMove()) {
+      stopAi();
+      return;
+    }
+
+    // 已经有计时在跑就别重置，否则每帧都会被推迟
+    if (ai.deadline > 0) return;
+
+    ai.timer = AI.thinkTimeOf(ai.level);
+    ai.deadline = nowMs() + ai.timer;
+  }
+
+  /**
+   * 每帧检查一次：到点就让电脑落子。
+   *
+   * 用**墙上时间**判定到点，而不是「每帧扣掉一个固定步长」——
+   * 后者在浏览器节流 rAF（后台标签页、无头模式）时会慢得离谱：
+   * 实测无头 Chrome 里 1.2 秒只跑了 1 帧，按帧计时要等十几秒才落子。
+   */
+  function aiFrame() {
+    if (!isPlaying()) return;
+
+    if (ai.deadline <= 0) {
+      scheduleAi();
+      if (ai.deadline <= 0) return;
+    }
+
+    ai.timer = Math.max(0, ai.deadline - nowMs());
+
+    if (ai.timer > 0) return;   // 还在等：交给渲染循环继续排下一帧
+
+    stopAi();
+
+    var move = AI.chooseMove(state, ai.level);
+
+    if (move && state.winner === T.WINNER_NONE) playMove(move.x, move.y);
+  }
+
+  /**
+   * 切换对手档位。
+   * - 'human' ：人人对战
+   * - 'easy' | 'normal' | 'hard'：电脑执白，黑方仍是人
+   */
+  function setLevel(level) {
+    var valid = level === 'human' || !!AI.LEVELS[level];
+    ai.level = valid ? level : 'human';
+
+    // 换档位时作废未落子的计时：不该用旧档位的节奏继续
+    stopAi();
+
+    // 选中态必须在这里同步：菜单界面下渲染循环不跑，
+    // 若等 updateAiHud()（挂在 render() 里）来刷，按钮要等进对局再退回才变色。
+    syncLevelButtons();
+
+    if (!isPlaying()) return;
+
+    scheduleAi();
+    scheduleRender();
   }
 
   /**
@@ -446,6 +647,7 @@
     winNoticeTimer = null;
 
     hideVictory();
+    stopAi();
 
     var mode = Modes.get(appState.mode);
 
@@ -467,7 +669,13 @@
     RenderArena.resetEffects();
     RenderBoard.resetEffects();
 
+    // 电脑永远执白、人执黑，所以新局的第一手一定是人的
+    scheduleAi();
+
     render();
+
+    // reduced-motion 下循环不会自续，但这里若轮到电脑仍需把循环拉起来
+    if (aiIsThinking()) scheduleRender();
   }
 
   // ── 屏幕切换（只有 menu 与 game 两个屏幕）───────────────────────────────
@@ -494,6 +702,7 @@
     winNoticeTimer = null;
 
     hideVictory();
+    stopAi();
 
     appState.screen = 'menu';
 
@@ -561,6 +770,9 @@
   }
 
   function onPointerDown(event) {
+    // 电脑思考时不接受人的落子（playMove 里还有一道保险）
+    if (aiIsThinking() && state.currentPlayer === aiPlayer()) return;
+
     var p = toCanvasPoint(event);
     var point = locatePoint(p.px, p.py);
     if (!point) return;
@@ -572,6 +784,17 @@
     if (!isPlaying()) return;
     if (event.key === 'r' || event.key === 'R') restartGame();
     if (event.key === 'Escape') backToMenu();
+  }
+
+  /** 把一个「对手」按钮绑到 setLevel 上。 */
+  function bindLevelButton(btn) {
+    if (!btn) return;
+
+    btn.setAttribute('data-ai-bound', '1');   // 便于排查「按钮没反应」：有这个标记就说明绑上了
+
+    btn.addEventListener('click', function () {
+      setLevel(btn.getAttribute('data-ai-level'));
+    });
   }
 
   function bindControls() {
@@ -586,6 +809,19 @@
     elements.modeSnowBtn.addEventListener('click', function () { enterMode('snow'); });
     elements.modeRiverBtn.addEventListener('click', function () { enterMode('river'); });
     elements.modeMineBtn.addEventListener('click', function () { enterMode('mine'); });
+
+    // 对手档位：菜单与游戏内两套按钮，点了都只改一个地方（ai.level）。
+    // 直接遍历 roles 现查现绑，避免再依赖一个中间集合。
+    var levelRoles = [
+      'btn-level-human', 'btn-level-easy', 'btn-level-normal', 'btn-level-hard',
+      'gbtn-level-human', 'gbtn-level-easy', 'gbtn-level-normal', 'gbtn-level-hard'
+    ];
+
+    for (var r = 0; r < levelRoles.length; r++) {
+      var btns = $all(levelRoles[r]);
+
+      for (var b = 0; b < btns.length; b++) bindLevelButton(btns[b]);
+    }
 
     if (elements.victoryAgain) {
       elements.victoryAgain.addEventListener('click', restartGame);
@@ -620,6 +856,21 @@
     elements.legendRiver = $all('legend-river');
     elements.legendMine = $all('legend-mine');
 
+    // ⚠ 顺序要紧：档位按钮必须在 bindControls() **之前**收集好，
+    // 否则绑定循环遍历到 undefined，按钮点了没反应（踩过这个坑）。
+    elements.levelButtons = $all('btn-level-human').concat(
+      $all('btn-level-easy'),
+      $all('btn-level-normal'),
+      $all('btn-level-hard'),
+      $all('gbtn-level-human'),
+      $all('gbtn-level-easy'),
+      $all('gbtn-level-normal'),
+      $all('gbtn-level-hard')
+    );
+
+    elements.aiStatus = $('ai-status');
+    elements.aiText = $('ai-text');
+
     elements.rulesClassic = $('rules-classic');
     elements.rulesSnow = $('rules-snow');
     elements.rulesRiver = $('rules-river');
@@ -653,6 +904,10 @@
     elements.game.hidden = true;
 
     bindControls();
+
+    // 让档位按钮的选中态从一开始就有显式值：
+    // HTML 里只有默认档位那一个带 aria-pressed，其余按钮要等第一次同步才有属性。
+    syncLevelButtons();
   }
 
   G.Main = {
@@ -662,6 +917,12 @@
     getAppState: function () { return appState; },
     enterMode: enterMode,
     backToMenu: backToMenu,
+
+    // 电脑对手
+    setLevel: setLevel,
+    getLevel: function () { return ai.level; },
+    isAiThinking: aiIsThinking,
+    getAiTimer: function () { return ai.timer; },
 
     // 暴露给调试与后续场地开发使用
     getState: function () { return state; },
